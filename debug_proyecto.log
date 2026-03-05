@@ -1,0 +1,29 @@
+2026-03-03 11:53:27.450 | INFO     | __main__:leer_codigo_fuente:12 - Intentando leer el archivo: codigo_prueba.py
+2026-03-03 11:53:27.452 | ERROR    | __main__:leer_codigo_fuente:16 - Archivo no encontrado en la ruta: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Generador-de-documentos-con-LLM-\codigo_prueba.py
+2026-03-03 11:53:27.452 | WARNING  | __main__:<module>:39 - No se pudo obtener el código para procesar.
+2026-03-03 11:54:18.921 | INFO     | __main__:leer_codigo_fuente:11 - Intentando leer el archivo: Rag.py
+2026-03-03 11:54:18.923 | ERROR    | __main__:leer_codigo_fuente:15 - Archivo no encontrado en la ruta: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Generador-de-documentos-con-LLM-\Rag.py
+2026-03-03 11:54:18.923 | WARNING  | __main__:<module>:38 - No se pudo obtener el código para procesar.
+2026-03-03 12:28:19.505 | INFO     | __main__:leer_codigo_fuente:11 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-03 12:28:19.516 | SUCCESS  | __main__:leer_codigo_fuente:23 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-03 12:28:59.967 | INFO     | __main__:leer_codigo_fuente:11 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-03 12:28:59.971 | SUCCESS  | __main__:leer_codigo_fuente:23 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-03 12:50:10.462 | INFO     | reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-03 12:50:10.466 | SUCCESS  | reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-03 19:55:37.456 | INFO     | reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-03 19:55:37.461 | SUCCESS  | reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-03 19:55:39.769 | INFO     | __main__:main:21 - ==================================================
+2026-03-03 19:55:39.769 | INFO     | __main__:main:22 - py-analyzer — Generador de informes
+2026-03-03 19:55:39.770 | INFO     | __main__:main:23 - ==================================================
+2026-03-03 19:55:39.770 | INFO     | reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-03 19:55:39.773 | SUCCESS  | reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-03 19:55:39.774 | INFO     | parser:analizar_codigo:7 - Iniciando análisis del código
+2026-03-03 19:55:39.777 | INFO     | parser:analizar_codigo:19 - Código analizado correctamente
+2026-03-04 09:36:47.254 | INFO     | core.reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-04 09:36:47.258 | SUCCESS  | core.reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-04 09:40:15.954 | INFO     | core.reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-04 09:40:15.959 | SUCCESS  | core.reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-04 09:40:33.739 | INFO     | core.reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-04 09:40:33.743 | SUCCESS  | core.reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)
+2026-03-04 09:43:31.358 | INFO     | core.reader:leer_codigo_fuente:12 - Intentando leer el archivo: C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py
+2026-03-04 09:43:31.363 | SUCCESS  | core.reader:leer_codigo_fuente:24 - Archivo 'C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py' leído correctamente (8228 caracteres)

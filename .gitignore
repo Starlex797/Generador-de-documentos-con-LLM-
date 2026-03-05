@@ -1,0 +1,16 @@
+# Archivos Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Configuración sensible (API keys)
+.env
+
+# IDEs
+.vscode/
+.idea/

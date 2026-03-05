@@ -1,0 +1,231 @@
+# 📄 Pipeline de Generación de Documentación Automática con Groq LLM
+
+## Visión General
+
+El sistema transforma un archivo `.py` en un informe de documentación estructurado en Markdown, pasando por varias etapas de procesamiento antes y después de la llamada al LLM.
+
+```mermaid
+flowchart LR
+    A["📄 Archivo .py"] --> B["🔍 Lectura y\nParseo AST"]
+    B --> C["🧹 Preprocesamiento\ny Extracción"]
+    C --> D["📝 Construcción\ndel Prompt"]
+    D --> E["🤖 LLM Groq\n(llamada API)"]
+    E --> F["✅ Postprocesamiento"]
+    F --> G["📑 Informe\nMarkdown"]
+```
+
+---
+
+## Etapas del Pipeline
+
+### 1. 📄 Lectura del Archivo `.py`
+
+**Entrada:** Ruta al archivo Python.  
+**Salida:** Contenido del archivo como string.
+
+```python
+with open("mi_modulo.py", "r", encoding="utf-8") as f:
+    source_code = f.read()
+```
+
+**Consideraciones:**
+- Manejar `encoding` (UTF-8 es lo habitual).
+- Validar que el archivo existe y es Python válido antes de continuar.
+
+---
+
+### 2. 🔍 Preprocesamiento y Extracción (AST + Heurísticas)
+
+**Entrada:** Código fuente como string.  
+**Salida:** Diccionario estructurado con la información del módulo.
+
+Esta es la etapa más importante. Se usa el módulo `ast` de Python para hacer un **análisis estático** del código sin ejecutarlo.
+
+#### ¿Qué se extrae?
+
+| Elemento           | Cómo se obtiene          | Ejemplo                          |
+|--------------------|--------------------------|----------------------------------|
+| Nombre del módulo  | Nombre del archivo       | `mi_modulo`                      |
+| Docstring global   | `ast.get_docstring()`    | `"""Módulo de utilidades..."""`  |
+| Imports            | Nodos `ast.Import`       | `import os`, `from pathlib...`   |
+| Clases             | Nodos `ast.ClassDef`     | Nombre, métodos, docstring       |
+| Funciones          | Nodos `ast.FunctionDef`  | Nombre, parámetros, docstring    |
+| Variables globales | Nodos `ast.Assign`       | `MAX_SIZE = 100`                 |
+| Decoradores        | `.decorator_list`        | `@staticmethod`, `@property`     |
+
+#### Estructura resultante (Python dict → JSON)
+
+```json
+{
+  "module_name": "mi_modulo",
+  "docstring": "Módulo de procesamiento de datos.",
+  "imports": ["os", "pathlib.Path", "numpy as np"],
+  "functions": [
+    {
+      "name": "calcular_media",
+      "args": ["valores", "redondear=True"],
+      "docstring": "Calcula la media de una lista.",
+      "decorators": [],
+      "lineno": 12
+    }
+  ],
+  "classes": [
+    {
+      "name": "Procesador",
+      "docstring": "Clase principal de procesamiento.",
+      "methods": [
+        {
+          "name": "__init__",
+          "args": ["self", "config"],
+          "docstring": null,
+          "lineno": 30
+        }
+      ]
+    }
+  ],
+  "global_vars": ["MAX_SIZE", "DEFAULT_PATH"]
+}
+```
+
+> [!TIP]
+> Serializar este dict a **JSON** es la forma más estructurada y fiable de pasarle la información al LLM. También puedes pasar el código fuente directamente, pero el JSON reduce tokens y guía mejor la respuesta.
+
+---
+
+### 3. 📝 Construcción del Prompt
+
+**Entrada:** Dict/JSON estructurado + plantilla del informe deseado.  
+**Salida:** Lista de mensajes para la API de Groq.
+
+#### Dos estrategias de entrada al LLM
+
+| Estrategia | Descripción | Cuándo usarla |
+|---|---|---|
+| **Código fuente directo** | Se pasa el `.py` completo como texto | Archivos pequeños (<200 líneas), cuando se quiere que el LLM infiera contexto |
+| **JSON estructurado** | Se pasa el dict extraído con AST | Archivos grandes, mayor control sobre el output, menos tokens |
+| **Híbrido** | JSON de estructura + fragmentos de código relevantes | Equilibrio óptimo para la mayoría de casos |
+
+#### Ejemplo de prompt (estrategia híbrida)
+
+```python
+system_prompt = """
+Eres un experto en documentación de software Python.
+Tu tarea es generar un informe de documentación técnica estructurado en Markdown.
+El informe debe seguir EXACTAMENTE esta estructura:
+
+# Documentación: {module_name}
+## Descripción General
+## Dependencias
+## Funciones
+### nombre_funcion(args)
+**Descripción:** ...
+**Parámetros:** ...
+**Retorna:** ...
+## Clases
+## Notas y Consideraciones
+"""
+
+user_prompt = f"""
+Analiza el siguiente módulo Python y genera el informe.
+
+## Metadatos extraídos (JSON):
+```json
+{json.dumps(metadata, indent=2, ensure_ascii=False)}
+```
+
+## Código fuente:
+```python
+{source_code}
+```
+"""
+
+messages = [
+    {"role": "system", "content": system_prompt},
+    {"role": "user",   "content": user_prompt}
+]
+```
+
+---
+
+### 4. 🤖 Llamada a la API de Groq
+
+**Entrada:** Lista de mensajes.  
+**Salida:** String con el informe en Markdown generado.
+
+```python
+from groq import Groq
+
+client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",   # o mixtral-8x7b-32768
+    messages=messages,
+    temperature=0.2,        # bajo → más determinista y técnico
+    max_tokens=4096,
+)
+
+report_markdown = response.choices[0].message.content
+```
+
+---
+
+### 5. ✅ Postprocesamiento y Guardado
+
+**Entrada:** String Markdown del LLM.  
+**Salida:** Archivo `.md` guardado en disco.
+
+```python
+output_path = f"docs/{module_name}_doc.md"
+with open(output_path, "w", encoding="utf-8") as f:
+    f.write(report_markdown)
+```
+
+**Validaciones opcionales:**
+- Comprobar que el Markdown contiene las secciones esperadas (regex o string search).
+- Si falta alguna sección, hacer un segundo llamado al LLM para completarla (retry logic).
+
+---
+
+## ⚙️ Consideraciones Clave
+
+### Límites de tokens
+- Los modelos de Groq tienen un **context window** limitado (ej. Llama 3.3 70B: ~128k tokens).
+- Un archivo `.py` de 500 líneas puede consumir ~2.000-5.000 tokens.
+- Si el archivo es muy grande: **divide por clases/funciones** y genera el informe por partes.
+
+### Temperatura del LLM
+- Usa **temperature baja (0.1–0.3)** para documentación técnica → respuestas consistentes y reproducibles.
+- Temperatura alta → respuestas más creativas pero menos fiables para documentación.
+
+### Coste y velocidad
+- Groq ofrece inferencia muy rápida (LPU). Para un `.py` pequeño, la respuesta llega en <2 segundos.
+- Ten en cuenta los **rate limits** de la API si procesas muchos archivos en lote.
+
+### Calidad del output
+- La calidad del informe depende principalmente de la **calidad del prompt** (system prompt).
+- Define claramente en el system prompt la **estructura exacta** que quieres: secciones, formato, nivel de detalle.
+- Añade ejemplos en el prompt (*few-shot prompting*) si el output no tiene el formato deseado.
+
+### Seguridad
+- Nunca incluyas el `GROQ_API_KEY` directamente en el código. Usa un archivo `.env` + `python-dotenv`.
+- Si el código fuente es confidencial, ten en cuenta que se envía a la API externa de Groq.
+
+### Reproducibilidad
+- Guarda junto al informe el **modelo utilizado** y la **versión del prompt** para poder reproducir o actualizar la documentación.
+
+---
+
+## 🗂️ Estructura de Carpetas Recomendada
+
+```
+py-analyzer/
+├── main.py               # Orquestador del pipeline
+├── extractor.py          # Lógica de parseo AST
+├── prompt_builder.py     # Construcción del prompt
+├── llm_client.py         # Wrapper de la API Groq
+├── postprocessor.py      # Validación y guardado
+├── templates/
+│   └── report_template.md  # Plantilla del informe deseado
+├── output/               # Informes generados
+└── .env                  # GROQ_API_KEY (no subir a git)
+```
