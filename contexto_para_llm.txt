@@ -1,0 +1,619 @@
+
+
+--- ARCHIVO: app.py (3853 tokens) ---
+import os
+import sys
+import json
+import requests
+from dotenv import load_dotenv
+
+# --- IMPORTS DE TUS OTROS ARCHIVOS ---
+from mis_tools import tools_disponibles          
+from Rag import inicializar_rag, buscar_contexto 
+from ml_model import predecir_precio   
+
+# ============================================================================
+# CONFIGURACIÓN
+# ============================================================================
+def load_config(): # carga la configuración desde variables de entorno
+    """Carga y valida la configuración desde variables de entorno."""
+    load_dotenv() # carga las variables de entorno
+
+    config = {
+        "backend": os.getenv("BACKEND", "ollama").lower(), # os.getenv() es una función que retorna el valor de una variable de entorno.Y
+        # si no existe la variable de entorno, retorna el valor por defecto que le pasamos (Que en este caso es "ollama").
+        "temperature": float(os.getenv("TEMPERATURE", "0.0")),
+        "ollama_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1/chat/completions"),
+        "ollama_model": os.getenv("OLLAMA_MODEL", "tinyllama"),
+        "groq_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions"),
+        "groq_model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        "groq_api_key": os.getenv("GROQ_API_KEY"),
+    }
+
+    if config["backend"] not in ["ollama", "groq"]: # 
+        print(f"Error: BACKEND inválido '{config['backend']}'.")
+        sys.exit(1)
+
+    if config["backend"] == "groq" and not config["groq_api_key"]: # si el backend es groq y no hay api key
+        print("Error: BACKEND=groq requiere GROQ_API_KEY.") 
+        sys.exit(1) # sale del programa
+
+    return config # retorna la configuración. Es decir, nos está dando las variables de entorno
+
+# ============================================================================
+# FUNCIONES DE CHAT
+# ============================================================================
+
+def chat_backend(messages, config, tools=None):# ChatBackend es una función que recibe 3 parámetros: messages, config y tools.
+    # tools es una lista de herramientas que se le pasan al chat y es None porque es opcional que utilice la herramienta.
+    # messages es una lista de diccionarios que representan el historial de la conversación.
+    # config es un diccionario que contiene la configuración del chat.
+    """Función unificada para Ollama y Groq."""
+    if config["backend"] == "groq":
+        url = config["groq_url"]
+        headers = {"Authorization": f"Bearer {config['groq_api_key']}", "Content-Type": "application/json"} 
+        #Los headeres son las cabeceras que se le pasan al chat, en este caso le pasamos la api key y el tipo de contenido que estamos enviando (Si es una imagen o un json).
+        model = config["groq_model"]
+    else: # si el backend es ollama
+        url = config["ollama_url"]
+        headers = {"Content-Type": "application/json"} # Ollama no necesita autenticación de api key. 
+        model = config["ollama_model"] # Le pasamos el modelo que queremos usar.
+# payload es un diccionario que contiene la información que se le envía al chat.
+    payload = {
+        "model": model, # Le pasamos el modelo que queremos usar.
+        "messages": messages,# Le pasamos el historial de la conversación.
+        "temperature": config["temperature"], # La temperatura es un parámetro que controla la creatividad del modelo. Un valor de 0.0 hace que el modelo sea más determinista, mientras que un valor de 1.0 hace que sea más creativo.
+        "stream": False, # Stream es un parámetro que controla si el modelo debe enviar la respuesta en tiempo real o en un solo bloque. Un valor de False hace que el modelo envíe la respuesta en un solo bloque.
+    }
+    
+    if tools: # Si tools es True, entonces le pasamos las herramientas al payload.
+        payload["tools"] = tools # Le pasamos las herramientas al payload.
+        payload["tool_choice"] = "auto" # Tool_choice es un parámetro que controla si el modelo debe usar las herramientas. Un valor de "auto" hace que el modelo use las herramientas siempre que quiera
+#Aquí es donde el código intenta comunicarse con el servidor (Ollama o Groq).
+    try:
+        #url: A dónde va el mensaje.
+        #json=payload: El contenido (la carta).
+        #headers=headers: Las etiquetas del sobre (el sello y el tipo de contenido).
+        #timeout=60: Es el cronómetro. Si el servidor no responde en 60 segundos, el programa "se rinde" para no quedarse colgado para siempre.
+        response = requests.post(url, json=payload, headers=headers, timeout=60) # Aquí es donde el código intenta comunicarse con el servidor (Ollama o Groq).
+        response.raise_for_status() # Si la respuesta no es exitosa, se lanza una excepción.
+
+        # --------------------------------------------
+
+    #Printea el Json mandado y recibido
+
+        full_json = response.json() # full_json es una variable que almacena la respuesta del servidor en formato json.
+
+        print("\n--- RESPUESTA JSON DEL SERVIDOR ---")
+
+        print(json.dumps(full_json, indent=2, ensure_ascii=False)) # json.dumps es una función que convierte un objeto json a una cadena de texto.
+
+        print("------------------------------------\n")
+
+    # --------------------------------------------
+        return response.json()["choices"][0]["message"] 
+        """El servidor de Ollama o Groq devuelve un objeto json. lo que hace esta línea es
+        extraer el mendaje de esa respuesta"""
+    except requests.exceptions.HTTPError as e:
+        print(f"Error de conexión: {e}") # Si hay un error de conexión, se imprime el error.
+        print(f"Detalle del error: {e.response.text}")  # Muestra el cuerpo del error para debuggear
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error de conexión: {e}")
+        return None
+
+# ============================================================================
+# BUCLE PRINCIPAL
+# ============================================================================
+def main(): # Aquí es donde se ejecuta el programa.
+    config = load_config() # Carga la configuración.
+    
+    # DEFINIMOS TUS DOCUMENTOS AQUÍ
+    mis_documentos = [
+        "Formación_Estructural.pdf",
+        "CE_4.pdf"
+    ]
+    # IMPORTANTE: Aquí inicializamos el RAG
+    collection = inicializar_rag(mis_documentos) # Inicializa el RAG con el documento "Formación_Estructural.pdf".
+    
+    print(f"\n🤖 Bankbot Agente iniciado. Backend: {config['backend'].upper()}") # Imprime el mensaje de bienvenida.
+    print("Comandos: 'exit', 'reset'.\n") # Imprime los comandos disponibles.
+
+    system_message = {  # system_message es un diccionario que contiene el mensaje del sistema. Le damos la personalidad 
+        "role": "system",   # Role es el rol que tiene el agente. 
+        "content": "Eres un asistente experto. Si el usuario pregunta sobre normativas o detalles técnicos, USA la herramienta consultar_pdf."
+    }
+    history = [system_message] # history es una lista que contiene el historial de la conversación.
+
+    while True: # Bucle infinito que se ejecuta hasta que se rompa. 
+        try: # Try es una excepción que se utiliza para manejar errores.
+            user_input = input("\nTú: ").strip() #strip() elimina los espacios en blanco al inicio y al final de la cadena.
+            #  user_input es la entrada del usuario.
+        except (EOFError, KeyboardInterrupt): # EOFError es un error que se produce cuando se intenta leer un archivo que no existe. KeyboardInterrupt es un error que se produce cuando se intenta leer un archivo que no existe.
+            break
+# Lo que vamos a hacer es, si el usuario no escribe nada, es decir el valor de user_input es vacio.
+# Ponemos continious y que vuelva al principio del While 
+        if not user_input: continue  
+        if user_input.lower() == "exit": break  # Si el usuario escribe "exit", se sale del bucle.
+        if user_input.lower() == "reset": # Si el usuario escribe "reset", se reinicia el historial.
+            history = [system_message] #  Estamos reiniciando el historial.
+            print("Historial borrado.\n") 
+            continue # Vuelve al principio del bucle.
+        history.append({"role": "user", "content": user_input}) #  Si el mensaje del usurio NO es vacio llegamos a esta línea 
+        # Aquí estamos guardando el historial de la conversación. 
+        # Utilizando un diccionario nos permite agrupar el contenido del mensaje. La IA no sabe de quién es el mensaje. 
+        # Es por eso que tenemos que mencionar que el mensaje que está guardando es del USUARIO (NOSOTROS). Si no lo ponemos 
+        # la IA no sabrá que ese mensaje lo escribimos nosotros y no ella.
+        
+        # LLAMADA 1
+        #Esta es la primera consulta donde damos a elegir al LLM si utiliza el RAG, la herramienta 
+        # response_msg es la respuesta que nos da el LLM.
+        response_msg = chat_backend(history, config, tools=tools_disponibles) # Tools  es la caja de herramienta que le entregamos al LLm y decimos que coja herramientas de mis_tools
+         #Antes de main ya habiamos explicado chat_backend(message, config, tools=None). Pero aquí especificamos tools 
+        #Le acabamos de entregar el expediente con la conversación (history) y una caja de herramientas que tenemos en mis_tools.py. 
+    
+        if not response_msg: continue # Si no hay respuesta, se sale del bucle.
+
+        # --- FIX PARA ERROR 400: Limpiamos el mensaje del asistente --- (NO ES NECESARIO HACER ESTO, EL ERROR 400 ERA POR EL MODELO QUE NO PUEDE MANEJAR TOOL CALLING)
+        # Groq rechaza mensajes con campos extra (logprobs, etc.) cuando los reenvías.
+        # Solo conservamos: role, content y tool_calls.
+        """
+        def limpiar_mensaje_asistente(msg):
+            #Limpia un mensaje del asistente para que Groq lo acepte.
+            limpio = {"role": msg.get("role", "assistant")}
+            c = msg.get("content")
+            limpio["content"] = c if c and c != "" else None
+            if msg.get("tool_calls"):
+                # Limpiar cada tool_call para solo mantener id, type, function
+                limpio["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": tc.get("type", "function"),
+                        "function": tc["function"]
+                    }
+                    for tc in msg["tool_calls"]
+                ]
+            return limpio """
+
+        assistant_msg = response_msg
+
+        # ----------------------------------------------------------------------------------
+        # ¿TOOL CALL?
+        """ Cuando hacemos la LLamada 1, el LLM analiza la pregunta del Usuario.
+        Si detecta que necesita el PDF, su respuesta es con un objeto de tool_calls.
+        Tool_calls no es un objeto que haya definido anteriormente, como si fuera una variable,
+        sino que es un campo que proviene directamente de la respuesta del LLM. El LLm genera un objeto Json.
+        En la función de chat_backend extrae el mensaje de esa respuesta.
+        Entonces, si el modelo ha decidido usar una herramienta, dentro de response_mdg vendra tool_calls
+        Si solo decimos HOLA, ese campo de tool_calls no existirá."""
+        #------------------------------------------------------------------------------------
+
+        if assistant_msg.get("tool_calls"): # Verificamos si dentro del mensaje de respuesta que nos da la IA está el objeto tool_calls.
+            # Si existe entra al bucle y ejecuta el código que hay dentro.Si no existe, LLM no utiliza el tool. 
+            print("⚙️  (Consultando manuales internos...)")
+            history.append(assistant_msg) # Guardamos la respuesta LIMPIA del LLM en el historial.
+            """ La IA puede usar varias herramientas al mismo tiempo. Por eso hacemos un for y recorre cada petición."""
+            for tool_call in assistant_msg["tool_calls"]: 
+                fn_name = tool_call["function"]["name"] # Extrae el nombre de la herramienta que quiere usar. En este caso consultar_pdf.
+                #Al final el tool  Recuerda que tool_call es una lista de diccionarios.
+                args = json.loads(tool_call["function"]["arguments"]) # Extrae los argumentos de la herramienta que quiere usar.
+                """json.loads(). La IA envia los parámetros como un texto plano, est alínea los convierte
+                en un diccionario de python para que puedas acceder a la clave búsqueda"""
+                if fn_name == "consultar_pdf":
+                    query = args.get("busqueda") # Ocurre la extracción de la clave de búsqueda.
+                    resultado = buscar_contexto(collection, query) # Es la Ejecucción del RAG
+                    # Collection es la inicialización del RAG 
+                    #Query es la pregunta que lo hacemos del RAG y lo sacamos de la búsqueda. 
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": str(resultado)  # Groq requiere que content sea siempre un string
+                    })
+                    """Esa variable query se le pasa la función buscar_contexto (lo cual 
+                    se encarga de ir a la VDB  y buscar los fragmentos del PDF que coincidan con el texto """
+                elif fn_name == "predecir_precio_casa":    
+                    print(">> [Ejecutando ML: Prediciendo el precio de la casa]")
+                    args = json.loads(tool_call["function"]["arguments"])
+                    
+                    # Extraemos las variables que el LLM dedujo de la charla
+                    beds = args.get("bedroom_count", 3)
+                    sqm = args.get("net_sqm", 80)
+                    cdist = args.get("center_distance", 5000)
+                    mdist = args.get("metro_distance", 500)
+                    floor = args.get("floor", 2)
+                    age = args.get("age", 10)
+                    
+                    # Llamamos a nuestro Random Forest
+                    precio_estimado = predecir_precio(beds, sqm, cdist, mdist, floor, age)
+                    # Preparamos el resultado para devolverlo al LLM
+                    detalles_usados = []
+                    if "bedroom_count" not in args: detalles_usados.append("3 habitaciones")
+                    if "net_sqm" not in args: detalles_usados.append("80 m²")
+                    if "center_distance" not in args: detalles_usados.append("5000 m del centro")
+                    if "metro_distance" not in args: detalles_usados.append("500 m del metro")
+                    if "floor" not in args: detalles_usados.append("2º piso")
+                    if "age" not in args: detalles_usados.append("10 años de antigüedad")
+                   
+                    nota_defaults = f" (Nota: Como no mencionaste algunos detalles, he asumido: {', '.join(detalles_usados)})" if detalles_usados else ""
+                    resultado = f"RESULTADO DEL MODELO PREDICTIVO: El precio estimado de esta casa es de {precio_estimado} euros. Las características usadas fueron: {beds} habs, {sqm} m2, a {cdist} de distancia del centro y {age} años de antigüedad.{nota_defaults}"  
+
+                    history.append({  # Aquí estamos guardando el resultado de la herramienta en el historial.
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": str(resultado)  # Groq requiere que content sea siempre un string
+                        
+                    })
+            
+            # LLAMADA 2
+            final_response = chat_backend(history, config) # Aqui history contiene la pregunta del usuario y el resultado del RAG 
+            if final_response: # Si hay respuesta
+                final_limpio = final_response
+                print(f"Asistente: {final_limpio['content']}") # Imprime la respuesta
+                history.append(final_limpio) # Guarda la respuesta LIMPIA en el historial
+            # La línea final_response = chat_backend(history, config) le envía a la IA todo el historial actualizado. 
+            # Ahora la IA no solo ve tu pregunta, sino también los datos reales del documento que acaba de recibir.
+        else: # Si no hay tool_calls, es decir, si no usa la herramienta. 
+            print(f"Asistente: {assistant_msg['content']}") # Imprime la respuesta
+            history.append(assistant_msg) # Guarda la respuesta LIMPIA en el historial
+
+if __name__ == "__main__": # Si el archivo se ejecuta como un script principal, se ejecuta la función main().
+    main() # Ejecuta la función main(). 
+
+--- ARCHIVO: gold_questions.json (1242 tokens) ---
+[
+    {
+        "id": 1,
+        "nivel": "Factual",
+        "pregunta": "¿Cómo define el documento a un banco y cuál es su objetivo principal?",
+        "respuesta_esperada": "Un banco es una institución financiera que recibe depósitos, otorga préstamos y facilita transacciones económicas[cite: 23]. Actúa como intermediario entre ahorradores y prestatarios para apoyar el flujo de dinero[cite: 23]. Su objetivo principal, como el de cualquier empresa, es ganar dinero[cite: 23].",
+        "puntos_clave": [
+            "Intermediario entre ahorradores y prestatarios",
+            "Facilitador de transacciones",
+            "Objetivo de lucro"
+        ],
+        "score_maximo": 10
+    },
+    {
+        "id": 2,
+        "nivel": "Comparativo",
+        "pregunta": "¿Cuál es la diferencia fundamental entre el Corporate Banking y el Investment Banking?",
+        "respuesta_esperada": "El Corporate Banking se enfoca en las necesidades operativas y diarias de las empresas, como préstamos, líneas de crédito y administración de efectivo[cite: 34, 42]. Por el contrario, el Investment Banking aborda estrategias financieras y transacciones a gran escala, tales como fusiones y adquisiciones (M&A), recaudación de capital o salidas a bolsa (IPO)[cite: 40, 42].",
+        "puntos_clave": [
+            "Corporate: Necesidades operativas/diarias",
+            "Investment: Estrategias a gran escala/M&A/IPO"
+        ],
+        "score_maximo": 20
+    },
+    {
+        "id": 3,
+        "nivel": "Técnico",
+        "pregunta": "Explica la mecánica de un Repo y la función del 'recorte' (haircut).",
+        "respuesta_esperada": "Un repo es una venta de valores con el compromiso simultáneo de recomprarlos a un precio fijo y en una fecha determinada, funcionando como un préstamo garantizado por valores (colateral)[cite: 215, 218]. El 'recorte' es un colchón que exige el prestamista para protegerse de caídas en el precio de los activos de garantía[cite: 234]. La fórmula de valoración diaria debe cumplir que $Ct \times (1 - h) = 100 + it$, donde h es el recorte e it son los intereses devengados[cite: 235].",
+        "puntos_clave": [
+            "Venta con pacto de recompra",
+            "Colateral como garantía",
+            "Recorte como protección ante volatilidad"
+        ],
+        "score_maximo": 25
+    },
+    {
+        "id": 4,
+        "nivel": "Factual - Clasificación",
+        "pregunta": "¿Cuáles son las tres vías para obtener rentabilidad en una inversión de renta variable?",
+        "respuesta_esperada": "Las tres vías son: 1. Plusvalías, que es la diferencia entre el precio de venta y el de compra[cite: 392]. 2. Dividendos, que es la remuneración variable basada en los beneficios de la empresa[cite: 396]. 3. Derechos de Suscripción Preferente (DSP), que permiten a los antiguos accionistas mantener su porcentaje de participación en ampliaciones de capital o vender dichos derechos[cite: 401, 402].",
+        "puntos_clave": [
+            "Plusvalías",
+            "Dividendos",
+            "Derechos de Suscripción"
+        ],
+        "score_maximo": 15
+    },
+    {
+        "id": 5,
+        "nivel": "Técnico - Mercado",
+        "pregunta": "¿Qué es un Market Maker y cómo obtiene su beneficio?",
+        "respuesta_esperada": "Un Market Maker es una entidad que facilita la liquidez en los mercados al estar dispuesta a comprar y vender activos de manera continua[cite: 567]. Establece precios de compra (bid) y venta (ask) para un activo específico[cite: 569]. Su beneficio se obtiene mediante el 'spread' o horquilla, que es la diferencia entre ambos precios[cite: 532, 569].",
+        "puntos_clave": [
+            "Proveedor de liquidez",
+            "Precios Bid/Ask continuos",
+            "Beneficio vía spread"
+        ],
+        "score_maximo": 15
+    },
+    {
+        "id": 6,
+        "nivel": "Razonamiento",
+        "pregunta": "¿Qué diferencia a los Bonos de las Obligaciones según el documento?",
+        "respuesta_esperada": "Ambos funcionan igual y tienen las mismas características, diferenciándose únicamente en los plazos de amortización original[cite: 349]. Los Bonos tienen un plazo de entre 2 y 5 años [cite: 350], mientras que las Obligaciones tienen un plazo superior a 7 años, llegando actualmente hasta los 50 años[cite: 351].",
+        "puntos_clave": [
+            "Mismas características funcionales",
+            "Diferencia solo en plazos",
+            "Bonos: 2-5 años; Obligaciones: >7 años"
+        ],
+        "score_maximo": 15
+    }
+]
+
+--- ARCHIVO: mis_tools.py (1082 tokens) ---
+import json
+# En mis_tools.py definimos las herramientas que tendrá nuestro LLM y que le pasaremos a la función chat_backend 
+"""Es el Manual de Instrucciones o el Menú de Habilidades que le entregas a la IA. La IA no sabe 
+qué herramientas tiene disponibles hasta que se las digas. Por eso es fundamental que este archivo esté bien escrito y sea claro. 
+Si la descripción no es clara, la IA no podrá usar la herramienta correctamente."""
+tools_disponibles = [
+    {
+        "type": "function", 
+        "function": {
+            "name": "consultar_pdf", # Es el identificador único de la herramienta.
+            "description": "Busca información técnica en la base de conocimientos (manuales, normativas y guías PDF.", #La IA lee esta frase y relaciona que debe usar esta herramienta para buscar información en el PDF. Damos context
+            "parameters": { # Es un formalario que dice, si vas a usar la herramienta, debes crear un testo de búsqueda y ponerlo en una etiqueta llamada "busqueda".
+                "type": "object",
+                "properties": {
+                    "busqueda": {
+                        "type": "string", 
+                        "description": "El término o frase a buscar en el documento."
+                    }
+                },
+                "required": ["busqueda"] # Le estamos diciendo a la IA que la clave "busqueda" es obligatoria. Si no la pone, no puede usar la herramienta.
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "predecir_precio_casa",
+            "description": "Calculadora precisa de precios de viviendas. Úsala siempre que el usuario pregunte por precios, tasaciones o coste de viviendas.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bedroom_count": {"type": "integer", "description": "Número de habitaciones. Si no menciona el número de habitaciones pon 2 ."},
+                    "net_sqm": {"type": "number", "description": "Metros cuadrados. Si dice 'grande' usa 120, si dice 'pequeña' usa 50. Por defecto 80."},
+                    "center_distance": {"type": "number", "description": "Distancia al centro. Si dice 'lejos' usa 15000, si dice 'cerca' usa 1000. Por defecto 5000."},
+                    "metro_distance": {"type": "number", "description": "Distancia al metro. Por defecto asume 500."},
+                    "floor": {"type": "integer", "description": "Piso de la casa. Por defecto 2."},
+                    "age": {"type": "integer", "description": "Años de antigüedad de la casa. Si dice 'nueva' usa 1, si dice 'vieja' usa 30. Por defecto 10."}
+                },
+                "required": ["bedroom_count", "net_sqm", "center_distance", "metro_distance", "floor", "age"]
+            }
+        }
+    }
+]
+"""En el archivo mis_tools.py, tú definiste un contrato (un esquema JSON) para la función consultar_pdf.
+Al poner "busqueda" dentro de properties, le estás diciendo a la IA: "Si quieres usar mi PDF, tienes que enviarme el texto dentro de una etiqueta llamada exactamente 'busqueda'".
+Es como el campo "Asunto" en un correo electrónico; sin ese nombre, el receptor no sabe dónde mirar para entender de qué trata el mensaje.
+2. Es el "Paquete" que envía la IA. Cuando el usuario hace una pregunta técnica, la IA (el LLM) no responde con texto normal, sino que crea un mensaje con una instrucción técnica.
+La IA escribe algo como: {"busqueda": "normas de seguridad"}.
+Aquí, "busqueda" es la clave y "normas de seguridad" es el valor (lo que el usuario quiere saber).
+3. Es la "Variable" que usa tu código Python
+En app.py, tu código recibe ese paquete de la IA. Como viene en formato de texto (JSON), necesitas extraer el contenido de la caja para poder usarlo:
+args = json.loads(...): Esta línea abre el paquete.
+query = args.get("busqueda"): Esta línea busca la etiqueta "busqueda", saca el valor que hay dentro (por ejemplo, "normas de seguridad") y lo guarda en la variable query.
+4. Es el "Motor" de la búsqueda final
+Finalmente, esa variable query (que sacaste de la clave "busqueda") es la que se envía a la función buscar_contexto en Rag.py.
+Sin esa clave, tu función buscar_contexto recibiría un vacío y no sabría qué fragmentos del PDF buscar en la base de datos de ChromaDB."""
+
+--- ARCHIVO: ml_model.py (315 tokens) ---
+import pandas as pd
+import os
+import kagglehub
+from sklearn.ensemble import RandomForestRegressor
+
+print("🧠 Entrenando modelo de Machine Learning (House Pricing) para el bot...")
+# Cargar datos
+path = kagglehub.dataset_download("rukenmissonnier/final-house")
+ruta_csv = os.path.join(path, 'house.csv')
+df = pd.read_csv(ruta_csv)
+
+# Separar y entrenar (Entrenamos con todos los datos para máxima precisión)
+X = df.drop(columns=['price'])
+y = df['price']
+
+modelo_rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+modelo_rf.fit(X, y)
+print("✅ Modelo ML listo para predecir.")
+
+# Esta es la función que usará el chatbot
+def predecir_precio(bedroom_count, net_sqm, center_distance, metro_distance, floor, age):
+    # Crear un DataFrame de una sola fila con lo que pida el usuario/LLM
+    entrada = pd.DataFrame([{
+        'bedroom_count': bedroom_count,
+        'net_sqm': net_sqm,
+        'center_distance': center_distance,
+        'metro_distance': metro_distance,
+        'floor': floor,
+        'age': age
+    }])
+    
+    # Predecir y devolver el precio redondeado a 2 decimales
+    precio = modelo_rf.predict(entrada)[0]
+    return round(precio, 2)
+
+--- ARCHIVO: Rag.py (1952 tokens) ---
+import os
+import uuid
+import chromadb
+from chromadb.utils import embedding_functions
+from pypdf import PdfReader
+
+# ======================================================================================
+# 🧠 CEREBRO DEL SISTEMA RAG "Retrieval-Augmented Generation" 
+# ======================================================================================
+"""
+Este archivo es el responsable de la "Memoria a Largo Plazo" de tu IA.
+Su misión es transformar un documento PDF estático en una base de datos "inteligente" (Semántica).
+
+Funciona en 3 pasos:
+1. LEER: Extrae el texto plano del PDF.
+2. TROCEAR (Chunking): Divide el texto en fragmentos pequeños para que la IA pueda procesarlos.
+3. VECTORIZAR Y GUARDAR: Convierte esos fragmentos en listas de números (embeddings) y los guarda
+   en ChromaDB, permitiendo buscar información por significado y no solo por palabras clave.
+"""
+
+# --- 1. CLASES Y FUNCIONES AUXILIARES ---
+
+class RecursiveChunker: 
+    """
+    ✂️ CLASE RECORTADORA DE TEXTO
+    La IA tiene un límite de atención (ventana de contexto). No puede "leer" un libro entero de golpe.
+    Esta clase se encarga de dividir el texto en trozos (chunks) manejables y lógicos.
+    """
+    def __init__(self, chunk_size=1000, chunk_overlap=100, separators=None):
+        """
+        Configuración de la "tijera":
+        - chunk_size=1000: Tamaño objetivo de cada trozo (caracteres).
+        - chunk_overlap=100: Solapamiento. Las últimas 100 letras de un trozo se repiten al inicio del siguiente.
+          ¿Por qué? Para evitar cortar una frase o idea importante justo por la mitad y perder el contexto.
+        - separators: Lista de preferencias de corte. Primero intenta cortar por párrafos (\n\n),
+          si el trozo sigue siendo grande, prueba por líneas (\n), luego por espacios...
+        """
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.separators = separators or ["\n\n", "\n", " ", ""]
+
+    def split_text(self, text):
+        # Función pública que inicia el proceso de división
+        return self._split_text_recursive(text, self.separators)
+
+    def _split_text_recursive(self, text, separators):
+        # Lógica interna (Recursiva):
+        # Si un fragmento es demasiado grande, se llama a sí misma con un separador más fino
+        # hasta lograr el tamaño adecuado.
+        final_chunks = []
+        if not separators: return [text]
+        separator = separators[0]
+        next_separators = separators[1:]
+        
+        # Intentamos dividir con el separador actual (ej: párrafos)
+        splits = list(text) if separator == "" else text.split(separator)
+        
+        current_doc = []
+        current_length = 0
+        
+        for split in splits:
+            len_sep = len(separator) if current_doc else 0
+            split_len = len(split) + len_sep
+            
+            # Si añadir este trozo supera el tamaño máximo permitido...
+            if current_length + split_len > self.chunk_size:
+                if current_doc:
+                    # ..cerramos el chunk actual y lo guardamos
+                    doc_text = separator.join(current_doc)
+                    if doc_text.strip(): final_chunks.append(doc_text)
+                    
+                    # Gestionamos el solapamiento (overlap) para el siguiente chunk
+                    while current_length > self.chunk_overlap and current_doc:
+                        removed = current_doc.pop(0)
+                        current_length -= (len(removed) + len(separator))
+                    if current_length < 0: current_length = 0
+                
+                # Si el trozo individual es GIGANTE (mayor que el límite), lo dividimos recursivamente
+                if len(split) > self.chunk_size:
+                    sub_chunks = self._split_text_recursive(split, next_separators)
+                    final_chunks.extend(sub_chunks)
+                else:
+                    current_doc.append(split)
+                    current_length += len(split) + (len(separator) if len(current_doc) > 1 else 0)
+            else:
+                # Si cabe, lo añadimos al chunk actual que estamos construyendo
+                current_doc.append(split)
+                current_length += split_len
+        
+        # Añadir lo que haya quedado pendiente
+        if current_doc:
+            doc_text = separator.join(current_doc)
+            if doc_text.strip(): final_chunks.append(doc_text)
+        return final_chunks
+
+def cargar_pdf(ruta_archivo):
+    """
+    📖 Lector de PDF simple.
+    Extrae todo el texto página a página y lo concatena en un solo string gigante.
+    """
+    if not os.path.exists(ruta_archivo):
+        print(f"❌ Error: El archivo {ruta_archivo} no existe en la carpeta.")
+        return None
+    reader = PdfReader(ruta_archivo)
+    texto = ""
+    for page in reader.pages:
+        extracted = page.extract_text()
+        if extracted: texto += extracted + "\n"
+    return texto
+
+# --- 2. FUNCIÓN DE INICIALIZACIÓN (IMPORTANTE: PUNTO DE ENTRADA) ---
+def inicializar_rag(lista_pdfs):
+    """
+    ⚙️ ARRANQUE DEL SISTEMA
+    Comprueba si ya tenemos la base de datos vectorial creada en el disco.
+    - SI EXISTE: La carga y listo.
+    - NO EXISTE: Lee el PDF, lo procesa y crea la base de datos desde cero.
+    """
+    print("⚙️ Iniciando ChromaDB...")
+    
+    # Manejo de un solo PDF como string (por seguridad)
+    if isinstance(lista_pdfs, str):
+        lista_pdfs = [lista_pdfs]
+
+    # A. Configurar el "Traductor a Números" (Embedding Function)
+    emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    
+    # B. Conectar a la Base de Datos (Persistente en disco)
+    client = chromadb.PersistentClient(path="./chroma_db")
+    
+    # C. Obtener o Crear la Colección 
+    collection = client.get_or_create_collection(name="mi_base_vectorial", embedding_function=emb_fn, metadata={"hnsw:space": "cosine"})
+
+    # D. Indexado de documentos
+    for pdf in lista_pdfs:
+        # Verificamos si ESTE archivo específico ya está indexado usando metadatos
+        # Buscamos si existe al menos 1 fragmento con source = pdf
+        existing = collection.get(where={"source": pdf}, limit=1)
+        
+        if len(existing['ids']) == 0: 
+            print(f"📖 Indexando nuevo documento: {pdf}...")
+            texto = cargar_pdf(pdf)
+
+            if texto:
+                # 2. Trocear texto
+                chunker = RecursiveChunker(chunk_size=1000, chunk_overlap=200)
+                chunks = chunker.split_text(texto)
+                
+                # 3. Preparar metadatos e IDs
+                ids = [str(uuid.uuid4()) for _ in range(len(chunks))]
+                # Guardamos el nombre del archivo en los metadatos 'source'
+                metadatos = [{"source": pdf} for _ in range(len(chunks))]
+                
+                # 4. Guardar en ChromaDB
+                collection.add(documents=chunks, metadatas=metadatos, ids=ids)
+                print(f"✅ Indexación completada: {len(chunks)} fragmentos de {pdf}.")
+            else:
+                print(f"⚠️ ERROR: No se pudo leer {pdf}. Asegúrate de que el archivo existe.")
+        else:
+            print(f"✅ {pdf} ya está indexado en la base de datos.")
+    
+    return collection
+
+# --- 3. FUNCIÓN DE BÚSQUEDA ---
+def buscar_contexto(collection, query):
+    """
+    🕵️‍♂️ EL BUSCADOR
+    Recibe la pregunta del usuario y encuentra los párrafos del PDF más relacionados.
+    Retorna un texto único con la información encontrada.
+    """
+    # Pedimos también los 'metadatas' para saber el nombre del archivo
+    resultados = collection.query(query_texts=[query], n_results=3)
+    
+    contexto_formateado = ""
+    
+    if resultados['documents'] and resultados['documents'][0]:
+        # Iteramos sobre los documentos y sus metadatos simultáneamente
+        for doc, meta in zip(resultados['documents'][0], resultados['metadatas'][0]):
+            fuente = meta.get('source', 'Desconocido')
+            contexto_formateado += f"--- Fuente: {fuente} ---\n{doc}\n\n"
+        return contexto_formateado
+        
+    return "No se encontró información relevante en los documentos."
+    
+
+--- ARCHIVO: requirements.txt (6 tokens) ---
+requests
+python-dotenv
