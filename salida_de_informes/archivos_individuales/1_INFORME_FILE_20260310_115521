@@ -1,0 +1,104 @@
+## 1. Abstract
+
+El archivo proporcionado es el núcleo de un sistema de "Memoria a Largo Plazo" para una IA, denominado "Retrieval-Augmented Generation" (RAG). Su función principal es transformar documentos PDF estáticos en una base de datos semántica, permitiendo la búsqueda de información por significado y no solo por palabras clave. El proceso se divide en tres pasos: leer el texto plano del PDF, trocear el texto en fragmentos pequeños para su procesamiento, y vectorizar y guardar estos fragmentos en una base de datos llamada ChromaDB. La base de datos se crea o carga según sea necesario, y se utiliza para indexar los documentos PDF proporcionados. El sistema también incluye una función de búsqueda que permite encontrar los párrafos del PDF más relacionados con una consulta dada. El objetivo del sistema es proporcionar una forma eficiente de almacenar y recuperar información de grandes conjuntos de documentos, aprovechando las capacidades de procesamiento de lenguaje natural de la IA.
+
+El sistema se implementa utilizando varias bibliotecas y tecnologías, incluyendo ChromaDB para la base de datos, SentenceTransformer para la vectorización de texto y PyPDF para la lectura de documentos PDF. La arquitectura del sistema se diseñó para ser escalable y flexible, permitiendo la incorporación de nuevos documentos y la actualización de la base de datos según sea necesario. En resumen, el sistema RAG es una herramienta poderosa para la gestión y recuperación de información en grandes conjuntos de documentos, y su implementación proporciona una base sólida para futuras extensiones y mejoras.
+
+## 2. Diagrama Lógico
+
+```mermaid
+graph LR
+    A[Inicio] --> B[Leer PDF]
+    B --> C[Trocear texto]
+    C --> D[Vectorizar y guardar]
+    D --> E[Crear o cargar base de datos]
+    E --> F[Indexar documentos]
+    F --> G[Búsqueda de contexto]
+    G --> H[Retornar resultados]
+```
+
+## 3. Explicación del proceso
+
+### Paso 1: Leer PDF
+
+El sistema comienza leyendo el texto plano del PDF utilizando la biblioteca PyPDF. Esta función se implementa en la función `cargar_pdf`, que devuelve el texto extraído del PDF.
+
+```python
+def cargar_pdf(ruta_archivo):
+    # ...
+    reader = PdfReader(ruta_archivo)
+    texto = ""
+    for page in reader.pages:
+        extracted = page.extract_text()
+        if extracted: texto += extracted + "\n"
+    return texto
+```
+
+### Paso 2: Trocear texto
+
+Una vez leído el texto, se utiliza la clase `RecursiveChunker` para dividir el texto en fragmentos pequeños. Esta clase se encarga de dividir el texto en trozos lógicos, teniendo en cuenta el tamaño máximo permitido y el solapamiento entre trozos.
+
+```python
+class RecursiveChunker:
+    # ...
+    def split_text(self, text):
+        # ...
+        return self._split_text_recursive(text, self.separators)
+```
+
+### Paso 3: Vectorizar y guardar
+
+Los fragmentos de texto se vectorizan utilizando la biblioteca SentenceTransformer, y se guardan en la base de datos ChromaDB. Esta función se implementa en la función `inicializar_rag`, que crea o carga la base de datos según sea necesario.
+
+```python
+def inicializar_rag(lista_pdfs):
+    # ...
+    emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    client = chromadb.PersistentClient(path="./chroma_db")
+    collection = client.get_or_create_collection(name="mi_base_vectorial", embedding_function=emb_fn, metadata={"hnsw:space": "cosine"})
+    # ...
+```
+
+### Paso 4: Crear o cargar base de datos
+
+La base de datos se crea o carga según sea necesario. Si la base de datos ya existe, se carga y se utiliza para indexar los documentos. Si no existe, se crea y se indexan los documentos.
+
+```python
+def inicializar_rag(lista_pdfs):
+    # ...
+    if len(existing['ids']) == 0:
+        print(f"📖 Indexando nuevo documento: {pdf}...")
+        # ...
+    else:
+        print(f"✅ {pdf} ya está indexado en la base de datos.")
+```
+
+### Paso 5: Búsqueda de contexto
+
+La función de búsqueda se utiliza para encontrar los párrafos del PDF más relacionados con una consulta dada. Esta función se implementa en la función `buscar_contexto`, que devuelve un texto único con la información encontrada.
+
+```python
+def buscar_contexto(collection, query):
+    # ...
+    resultados = collection.query(query_texts=[query], n_results=3)
+    contexto_formateado = ""
+    # ...
+    return contexto_formateado
+```
+
+## 4. Librerías utilizadas
+
+* PyPDF
+* SentenceTransformer
+* ChromaDB
+* uuid
+* os
+
+## 5. Puntos críticos y vulnerabilidades
+
+1. **Seguridad**: La función `cargar_pdf` no verifica la seguridad del archivo PDF antes de leerlo. Esto podría permitir la ejecución de código malicioso si el archivo PDF está corrupto o ha sido manipulado.
+ * Solución: Verificar la integridad del archivo PDF antes de leerlo, utilizando herramientas como `pdfminer` o `pyPDF2`.
+2. **Manejo de excepciones**: La función `inicializar_rag` no maneja las excepciones que podrían ocurrir al crear o cargar la base de datos. Esto podría causar que el sistema se bloquee o se produzcan errores inesperados.
+ * Solución: Agregar bloques `try-except` para manejar las excepciones que podrían ocurrir al crear o cargar la base de datos, y proporcionar mensajes de error claros y útiles.
+3. **Límites de tokens**: La función `buscar_contexto` no verifica los límites de tokens al realizar la búsqueda. Esto podría causar que el sistema se bloquee o se produzcan errores inesperados si la consulta es muy larga.
+ * Solución: Agregar una verificación de los límites de tokens antes de realizar la búsqueda, y proporcionar un mensaje de error claro y útil si la consulta excede los límites.

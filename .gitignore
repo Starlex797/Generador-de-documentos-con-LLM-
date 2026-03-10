@@ -14,3 +14,7 @@ env/
 # IDEs
 .vscode/
 .idea/
+# Logs # para no subir logs a github
+*.log
+# Que no guarde la carpeta de salidas_de_informes 
+salidas_de_informes/

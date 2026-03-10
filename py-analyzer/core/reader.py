@@ -56,8 +56,8 @@ def compilar_contexto_repositorio(ruta_directorio: str) -> tuple:
         # --- LECTURA Y CONTEO ---
         texto_extraido, tokens_archivo = leer_codigo_fuente(str(ruta_archivo)) # Se pone así cuando la función devuleve dos resultados, en este caso contenido y num tokens
         
-        if texto_extraido:
-            total_tokens_acumulados += tokens_archivo # ### NUEVO ###
+        if texto_extraido: # OJO pongo todo el código de los diferentes archivos en una varoable. Están etiquetadas pero no es la mejor opción por la ventana de contexto. 
+            total_tokens_acumulados += tokens_archivo # 
             contenido_total_proyecto += f"\n\n--- ARCHIVO: {ruta_archivo.name} ({tokens_archivo} tokens) ---\n"
             contenido_total_proyecto += texto_extraido
             logger.info(f"Archivo '{ruta_archivo.name}' leído correctamente | {tokens_archivo} tokens")
