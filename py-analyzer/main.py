@@ -1,9 +1,8 @@
 import os
 from loguru import logger
 from core.tree_generator import generar_arbol_contexto  # Fase 1
-from core.reader import compilar_contexto_repositorio    # Fase 2
-from core.reader import leer_codigo_fuente
-from core.ai_engine import preparar_prompt_final, SECCIONES # Fase 3
+from core.reader import compilar_contexto_repositorio
+from core.ai_engine import preparar_prompt_final, SECCIONES, preparar_prompt_map   #Fase 3 
 from dotenv import load_dotenv
 import sys
 import requests
@@ -15,7 +14,7 @@ from datetime import datetime
 
 # --- CONFIGURACIÓN ---
 RUTA_PROYECTO = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM"
-ARCHIVO_SOLO = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py"
+ARCHIVO_SOLO = None #r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py"
 CARPETA_BASE= "salida_de_informes"
 #------------------------
 # Subcarpetas 
@@ -37,49 +36,97 @@ def load_config():
     config = {
         "backend": os.getenv("BACKEND", "ollama").lower(),
         "temperature": float(os.getenv("TEMPERATURE", "0.2")), # Recomiendo 0.2 para código, 0.0 a veces es muy rígido
-        "ollama_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1/chat/completions"),
-        "ollama_model": os.getenv("OLLAMA_MODEL", "tinyllama"),
         "groq_url": os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions"),
         "groq_model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        "groq_api_key": os.getenv("GROQ_API_KEY"),
+        "groq_api_key": os.getenv("GROQ_API_KEY")
     }
 
-    if config["backend"] not in ["ollama", "groq"]:
+    if config["backend"] not in ["groq"]:
         logger.error(f"Error: BACKEND inválido '{config['backend']}'.")
         sys.exit(1)
 
-    if config["backend"] == "groq" and not config["groq_api_key"]:
+    if not config["groq_api_key"]:
         logger.error("Error: BACKEND=groq requiere GROQ_API_KEY.") 
         sys.exit(1)
 
     return config
 
+def realizar_peticion_llm(mensajes, config):
+    """Encapsula la lógica de comunicación con el backend (Groq/Ollama)."""
+    is_groq = config["backend"] == "groq"
+    url = config["groq_url"] if is_groq else config["ollama_url"]
+    
+    headers = {"Content-Type": "application/json"}
+    if is_groq:
+        headers["Authorization"] = f"Bearer {config['groq_api_key']}"
+
+    payload = {
+        "messages": mensajes,
+        "temperature": config["temperature"],
+        "model": config["groq_model"] if is_groq else config["ollama_model"]
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+def guardar_resultado(contenido, sub_destino, prefijo, ahora):
+    """Gestiona la persistencia de los informes en disco."""
+    ruta_subcarpeta = os.path.join(CARPETA_BASE, sub_destino)
+    os.makedirs(ruta_subcarpeta, exist_ok=True)
+    
+    indice = obtener_indice_archivo(ruta_subcarpeta)
+    nombre_final = f"{indice}_INFORME_{prefijo}_{ahora}.md"
+    ruta_completa = os.path.join(ruta_subcarpeta, nombre_final)
+    
+    with open(ruta_completa, "w", encoding="utf-8") as f:
+        f.write(contenido)
+    return ruta_completa
+
 @logger.catch
 def ejecutar_generador():
-    logger.info("🚀 Iniciando el proceso de documentación automática...")
+    logger.info("🚀 Iniciando proceso...")
     config = load_config()
-    ahora = datetime.now().strftime("%Y%m%d_%H%M%S") # Para conseguir el tiempo y el dia
-    # 1. GENERAR EL ÁRBOL (Fase 1)
+    ahora = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # FASE 1: Estructura
     arbol = generar_arbol_contexto(RUTA_PROYECTO)
-    if not arbol:
+    if not arbol: 
         logger.error("No se pudo generar el árbol. Abortando.")
         return
 
-    # 2. COMPILAR CÓDIGO Y TOKENS (Fase 2)
+    # FASE 2: Selección de archivos
     if ARCHIVO_SOLO and os.path.exists(ARCHIVO_SOLO):
-        logger.info(f"Procesando 1 archivo {os.path.basename(ARCHIVO_SOLO)}")
-        sub_destino= SUB_SINGLE 
-        prefijo ="FILE"
-        codigo, total_tokens= leer_codigo_fuente(ARCHIVO_SOLO)
-        logger.info(f"Contexto listo. Tamaño: {total_tokens} tokens.")
-        
+        archivos_a_procesar = [{"nombre": os.path.basename(ARCHIVO_SOLO), "contenido": leer_codigo_fuente(ARCHIVO_SOLO)[0]}]
+        sub_destino, prefijo = SUB_SINGLE, "FILE"
     else:
-      logger.info("Modo: Repositorio")
-      sub_destino= SUB_REPO 
-      codigo, total_tokens = compilar_contexto_repositorio(RUTA_PROYECTO)
-      logger.info(f"Contexto listo. Tamaño total: {total_tokens} tokens.")
-   
+        archivos_a_procesar = compilar_contexto_repositorio(RUTA_PROYECTO)
+        sub_destino, prefijo = SUB_REPO, "Repo"
 
+    # FASE 3: Bucle MAP (Procesamiento)
+    for archivo in archivos_a_procesar:
+        try:
+            logger.info(f"Analizando: {archivo['nombre']}")
+            
+            # Aquí podrías insertar la fragmentación con LlamaIndex si es necesario
+            mensajes = preparar_prompt_map(archivo["nombre"], archivo["contenido"])
+            
+            # Llamada centralizada
+            informe = realizar_peticion_llm(mensajes, config)
+            
+            # Guardado centralizado
+            ruta = guardar_resultado(informe, sub_destino, prefijo, ahora)
+            logger.success(f"✅ Guardado en: {ruta}")
+            
+        except Exception as e:
+            logger.error(f"Error procesando {archivo['nombre']}: {e}")
+
+if __name__ == "__main__":
+    ejecutar_generador()
+
+
+
+"""
     # 3. PREPARAR EL PROMPT (Fase 3)
     mensajes_llm = preparar_prompt_final(arbol, codigo, SECCIONES)
     
@@ -118,18 +165,7 @@ def ejecutar_generador():
         respuesta_json = response.json()
 
         informe_generado = respuesta_json["choices"][0]["message"]["content"]
-         
-       # Gestión de carpetas 
-        ruta_subcarpeta= os.path.join(CARPETA_BASE,sub_destino)
-        os.makedirs(ruta_subcarpeta,exist_ok=True)
 
-        indice= obtener_indice_archivo(ruta_subcarpeta)
-        nombre_final=f"{indice}_INFORME_{prefijo}_{ahora}"
-        ruta_completa_salida = os.path.join(ruta_subcarpeta, nombre_final)
-        # --- 5. GUARDAR RESULTADO REAL ---
-        with open(ruta_completa_salida, "w", encoding="utf-8") as f:
-            f.write(informe_generado)
-        logger.success(f"✅ Informe #{indice} guardado en: {ruta_completa_salida}")
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Error de red o de la API al conectar con {config['backend']}: {e}")
@@ -137,9 +173,7 @@ def ejecutar_generador():
             logger.error(f"Detalle del servidor: {response.text}")
     except Exception as e:
         logger.exception(f"Error inesperado procesando la respuesta: {e}")
-
-if __name__ == "__main__":
-    ejecutar_generador()
+"""
 
 
 """# ... (carga de config y generación de árbol)

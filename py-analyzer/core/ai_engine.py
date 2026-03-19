@@ -36,11 +36,12 @@ def preparar_prompt_map(nombre_archivo: str, codigo: str) -> list[dict]:
 OBJETIVO: Realizar un resumen técnico y conciso de un archivo específico.
 REGLAS:
 - Describe la responsabilidad principal del archivo.
-- Sigue los los pasos que se indican en el apartado de Secciones.
+- ¿De qué trata el archivo de la primera llamada?
+- Sigue  los pasos que se indican en el apartado de Secciones.
 - Utiliza un tono formal.
 - Usa un formato Markdown limpio."""
 
-    user_content = f"ARCHIVO: {nombre_archivo}\n\nCONTENIDO:\n{codigo}"
+    user_content = f"ARCHIVO: {nombre_archivo}\n\nCONTENIDO:\n{codigo}."
 
     return [
         {"role": "system", "content": system_content},

@@ -1,0 +1,108 @@
+## 1. Abstract
+
+El proyecto Arquitectura_Rag_con_LLM es un sistema de inteligencia artificial que combina un modelo de lenguaje grande (LLM) con un sistema de recuperación de información basado en contexto (RAG) para proporcionar respuestas precisas y relevantes a preguntas y consultas de los usuarios. El sistema utiliza un conjunto de herramientas y técnicas de procesamiento de lenguaje natural (NLP) para analizar y comprender el lenguaje humano y proporcionar respuestas adecuadas.
+
+El sistema consta de varios componentes, incluyendo un modelo de lenguaje grande (LLM) que se utiliza para analizar y comprender el lenguaje humano, un sistema de recuperación de información basado en contexto (RAG) que se utiliza para recuperar información relevante de una base de datos de documentos, y un conjunto de herramientas y técnicas de procesamiento de lenguaje natural (NLP) que se utilizan para analizar y comprender el lenguaje humano.
+
+El sistema es capaz de responder a una variedad de preguntas y consultas, incluyendo preguntas factuales, comparativas y técnicas, y puede proporcionar respuestas precisas y relevantes basadas en la información contenida en la base de datos de documentos. El sistema también es capaz de aprender y mejorar con el tiempo, a medida que se le proporciona más información y se le entrena para reconocer patrones y relaciones en el lenguaje humano.
+
+En resumen, el proyecto Arquitectura_Rag_con_LLM es un sistema de inteligencia artificial avanzado que combina un modelo de lenguaje grande (LLM) con un sistema de recuperación de información basado en contexto (RAG) para proporcionar respuestas precisas y relevantes a preguntas y consultas de los usuarios. El sistema es capaz de aprender y mejorar con el tiempo, y puede ser utilizado en una variedad de aplicaciones, incluyendo la atención al cliente, la educación y la investigación.
+
+## 2. Diagrama Lógico
+
+```mermaid
+graph LR
+    A[Usuario] -->|Pregunta|> B[LLM]
+    B -->|Análisis|> C[RAG]
+    C -->|Recuperación de información|> D[Base de datos de documentos]
+    D -->|Información relevante|> C
+    C -->|Respuesta|> B
+    B -->|Respuesta final|> A
+```
+
+## 3. Explicación del proceso
+
+### Paso 1: Análisis de la pregunta
+
+El sistema comienza analizando la pregunta o consulta del usuario utilizando el modelo de lenguaje grande (LLM). El LLM se utiliza para comprender el significado y el contexto de la pregunta, y para identificar las entidades y los conceptos clave que se mencionan en la pregunta.
+
+```python
+# Ejemplo de código para el análisis de la pregunta
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+# Cargar el modelo y el tokenizador
+model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased")
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+# Analizar la pregunta
+pregunta = "¿Cuál es el precio de la casa?"
+inputs = tokenizer.encode_plus(
+    pregunta,
+    add_special_tokens=True,
+    max_length=512,
+    return_attention_mask=True,
+    return_tensors="pt"
+)
+
+# Obtener la respuesta del modelo
+outputs = model(inputs["input_ids"], attention_mask=inputs["attention_mask"])
+```
+
+### Paso 2: Recuperación de información
+
+Una vez que se ha analizado la pregunta, el sistema utiliza el sistema de recuperación de información basado en contexto (RAG) para recuperar información relevante de la base de datos de documentos. El RAG se utiliza para recuperar los documentos que son más relevantes para la pregunta, y para proporcionar una respuesta precisa y relevante.
+
+```python
+# Ejemplo de código para la recuperación de información
+import chromadb
+
+# Conectar a la base de datos de documentos
+client = chromadb.PersistentClient(path="./chroma_db")
+
+# Recuperar información relevante
+resultados = client.query(query_texts=["precio de la casa"], n_results=3)
+
+# Obtener la respuesta final
+respuesta = ""
+for doc, meta in zip(resultados["documents"][0], resultados["metadatas"][0]):
+    fuente = meta.get("source", "Desconocido")
+    respuesta += f"--- Fuente: {fuente} ---\n{doc}\n\n"
+```
+
+### Paso 3: Respuesta final
+
+Finalmente, el sistema proporciona una respuesta final al usuario basada en la información recuperada y el análisis de la pregunta. La respuesta final se proporciona en un formato que es fácil de entender para el usuario.
+
+```python
+# Ejemplo de código para la respuesta final
+print(respuesta)
+```
+
+## 4. Librerías utilizadas
+
+* `transformers`
+* `torch`
+* `chromadb`
+* `python-dotenv`
+* `requests`
+
+## 5. Puntos críticos y vulnerabilidades
+
+### Punto crítico 1: Seguridad
+
+El sistema utiliza una base de datos de documentos que puede contener información sensible. Es importante asegurarse de que la base de datos esté segura y que solo los usuarios autorizados puedan acceder a ella.
+
+### Punto crítico 2: Manejo de excepciones
+
+El sistema puede generar excepciones si no se manejan correctamente los errores. Es importante asegurarse de que el sistema esté diseñado para manejar excepciones de manera efectiva y proporcionar respuestas útiles al usuario.
+
+### Punto crítico 3: Límites de tokens
+
+El sistema utiliza un modelo de lenguaje grande (LLM) que puede tener límites de tokens. Es importante asegurarse de que el sistema esté diseñado para manejar límites de tokens de manera efectiva y proporcionar respuestas útiles al usuario.
+
+Para solucionar estos puntos críticos, se pueden implementar las siguientes medidas:
+
+* Utilizar autenticación y autorización para asegurarse de que solo los usuarios autorizados puedan acceder a la base de datos.
+* Implementar un sistema de manejo de excepciones para asegurarse de que el sistema esté diseñado para manejar errores de manera efectiva.
+* Utilizar técnicas de procesamiento de lenguaje natural (NLP) para asegurarse de que el sistema esté diseñado para manejar límites de tokens de manera efectiva.

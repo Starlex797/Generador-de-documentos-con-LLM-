@@ -18,3 +18,8 @@ env/
 *.log
 # Que no guarde la carpeta de salidas_de_informes 
 salidas_de_informes/
+#
+debug_proyecto.log
+contexto_para_llm.txt
+RESUMENES_MAP.md
+desktop.ini

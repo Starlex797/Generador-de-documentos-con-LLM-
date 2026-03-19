@@ -19,25 +19,27 @@ def leer_codigo_fuente(ruta_archivo: str):
         return None
     
     try:
-        with open(ruta, "r", encoding="utf-8") as archivo:
+        with open(ruta, "r", encoding="utf-8") as archivo: # Lectura del archivo
             contenido = archivo.read()
         
-        # ### NUEVO: Calculamos tokens de este archivo específico ###
+        # ### Calculamos tokens de este archivo específico ###
         num_tokens = len(encoding.encode(contenido))
+        if num_tokens>=10000:
+             logger.info("⚠️ ALERTA: Es necesario hacer Chunking")
+        else: 
+            logger.info("🚀 INFO: No es necesario hacer Chunking")
         logger.success(f"Archivo '{ruta.name}' leído: {len(contenido)} chars | {num_tokens} tokens")
         
-        return contenido, num_tokens # ### NUEVO: Devolvemos también el conteo ###
+        return contenido, num_tokens # Nos devuelve el contenido del archivo y el número de tokens
             
     except Exception as e:
         logger.exception(f"Fallo crítico al leer {ruta.name}: {e}")
         return None, 0
 
-
-def compilar_contexto_repositorio(ruta_directorio: str) -> tuple:
+@logger.catch
+def compilar_contexto_repositorio(ruta_directorio: str) -> list[dict]:
     directorio_raiz = Path(ruta_directorio)
-    contenido_total_proyecto = "" # Se crea una variable para almacenar el contenido total del proyecto
-    total_tokens_acumulados = 0  # ### NUEVO ###
-
+    lista_archivos=[]
     for ruta_archivo in directorio_raiz.rglob("*"):
         if ruta_archivo.is_dir(): continue
 
@@ -57,29 +59,27 @@ def compilar_contexto_repositorio(ruta_directorio: str) -> tuple:
         texto_extraido, tokens_archivo = leer_codigo_fuente(str(ruta_archivo)) # Se pone así cuando la función devuleve dos resultados, en este caso contenido y num tokens
         
         if texto_extraido: # OJO pongo todo el código de los diferentes archivos en una varoable. Están etiquetadas pero no es la mejor opción por la ventana de contexto. 
-            total_tokens_acumulados += tokens_archivo # 
-            contenido_total_proyecto += f"\n\n--- ARCHIVO: {ruta_archivo.name} ({tokens_archivo} tokens) ---\n"
-            contenido_total_proyecto += texto_extraido
+            lista_archivos.append({
+                "nombre":ruta_archivo,
+                "contenido":texto_extraido,
+                "tokens":tokens_archivo
+            })
             logger.info(f"Archivo '{ruta_archivo.name}' leído correctamente | {tokens_archivo} tokens")
 
-    logger.info(f"Proceso finalizado. Tokens totales: {total_tokens_acumulados}")
-    return contenido_total_proyecto, total_tokens_acumulados # ### MODIFICADO ###
+    logger.info(f"Proceso finalizado.")
+    return  lista_archivos
 
 
 if __name__ == "__main__":
     carpeta_repo = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM"
     
     # ### MODIFICADO para recibir los dos valores ###
-    texto_final, total_tokens = compilar_contexto_repositorio(carpeta_repo)
+    texto_final = compilar_contexto_repositorio(carpeta_repo)
     
-    with open("contexto_para_llm.txt", "w", encoding="utf-8") as f:
+    with open("contexto_para_llm.txt", "r",encoding="utf-8") as f:
         f.write(texto_final)
         
     print(f"\n✅ Proceso completado.")
     print(f"📊 TOTAL DE TOKENS DEL PROYECTO: {total_tokens}")
     
-    # --- CONSEJO DEL PROFESOR ---
-    if total_tokens > 100000:
-        print("⚠️ ALERTA: Tienes más de 100k tokens. Si usas GPT-4o, vas bien, pero si usas modelos pequeños, considera hacer CHUNKING.")
-    else:
-        print("🚀 INFO: Tu proyecto es ligero. Cabe perfectamente en la mayoría de LLMs modernos sin chunking.")
+    

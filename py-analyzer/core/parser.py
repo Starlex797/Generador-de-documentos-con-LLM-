@@ -2,13 +2,15 @@
 import ast
 from loguru import logger
 import json
+from llama_index.core.node_parser import TokenTextSplitter, CodeNodeParser, SemanticSplitterNodeParser
+from llama_index.core import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 """No estamos creando el Chunking todavía, estamos separando el código en funciones/ clases y poniendolo en un diccionario"""
 
 @logger.catch
-def analizar_codigo(codigo: str)-> dict: # Me lo convierte en un diccionario
+def analizar_codigo_ast(codigo: str)-> dict: # Me lo convierte en un diccionario
     logger.info("Iniciando análisis del código")
-   
     estructura = {
         "imports": [],
         "funciones": [],
@@ -61,3 +63,122 @@ def analizar_codigo(codigo: str)-> dict: # Me lo convierte en un diccionario
     logger.success("Análisis completado")
     return estructura
 
+
+
+def splitting_and_processing_with_langchain(contenido:str, ruta_archivo:str, chunk_size: int, chunk_overlap: int):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap, language=Language.PYTHON)
+    return splitter
+
+"""
+# 'texto_extraido' viene de tu función leer_codigo_fuente
+
+Esto nos permite guardar cada uno de los chunks en un objeto o variable. Después havemos un for loop para enumerar cada uno de los chunks y mostrar su contenido.
+docs = splitter.create_documents([texto_extraido])
+
+for i, doc in enumerate(docs):
+    print(f"Fragmento {i}: {len(doc.page_content)} caracteres")
+
+MAPPING_LENGUAJES = {
+    ".py": Language.PYTHON,
+    ".js": Language.JS,
+    ".java": Language.JAVA
+}
+# Así, según el sufijo del archivo en reader.py, eliges el Language correcto.
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+from pathlib import Path
+# Importamos los lenguajes que soporta LangChain
+
+def procesar_y_dividir_codigo(contenido: str, ruta_archivo: str, chunk_size: int = 2000):
+ 
+    Toma el contenido de un archivo, detecta su lenguaje y lo divide en chunks lógicos.
+  
+    # 1. Mapeo de extensiones a lenguajes de LangChain
+    extension = Path(ruta_archivo).suffix.lower()
+    mapping = {
+        ".py": Language.PYTHON,
+        ".js": Language.JS,
+        ".java": Language.JAVA,
+        ".cpp": Language.CPP,
+        ".md": Language.MARKDOWN
+    }
+    
+    # Seleccionamos el lenguaje o usamos texto plano por defecto
+    lenguaje_seleccionado = mapping.get(extension, None)
+    
+    # 2. Configuración del Splitter
+    if lenguaje_seleccionado:
+        splitter = RecursiveCharacterTextSplitter.from_language(
+            language=lenguaje_seleccionado,
+            chunk_size=chunk_size,
+            chunk_overlap=int(chunk_size * 0.1) # 10% de solapamiento
+        )
+    else:
+        # Si no reconoce el lenguaje, usa un splitter de texto genérico
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=200
+        )
+    
+    # 3. Ejecución del corte
+    chunks = splitter.split_text(contenido)
+    return chunks
+"""
+
+
+# 1. Definimos el mapeo global de extensiones soportadas
+MAPPING_LENGUAJES = {
+    ".py": "python",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".java": "java",
+    ".html": "html",
+    ".md": "markdown",
+    ".json": "json",
+    ".vb": "visualbasic",
+    ".vba": "visualbasic",
+    ".vbs": "visualbasic",
+    ".bas": "visualbasic"
+}
+@logger.catch
+def procesar_archivo_multilenguaje(contenido: str, ruta_archivo: str, chunk_size: int, chunk_overlap: int):
+    """
+    Detecta el lenguaje automáticamente y divide el código en nodos.
+    """
+    # Extraer extensión del archivo
+    extension = os.path.splitext(ruta_archivo)[1].lower()
+    
+    # Buscar el lenguaje en el mapeo
+    lenguaje_ia = MAPPING_LENGUAJES.get(extension)
+
+    if not lenguaje_ia:
+        # Si la extensión es válida en reader.py pero no tiene parser específico
+        logger.warning(f"⚠️ Lenguaje no soportado para {extension}. Usando 'python' como fallback.")
+        lenguaje_ia = "python"
+
+    try:
+        # Crear el Documento con metadatos para el informe final
+        doc = Document(
+            text=contenido,
+            metadata={
+                "file_name": os.path.basename(ruta_archivo),
+                "language": lenguaje_ia,
+                "path": ruta_archivo,
+                "chunk_size": chunk_size,
+            }
+        )
+
+        # Configurar el parser con el lenguaje detectado
+        parser = CodeNodeParser(
+            language=lenguaje_ia,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+
+        nodos = parser.get_nodes_from_documents([doc])
+        logger.info(f"✅ {os.path.basename(ruta_archivo)} ({lenguaje_ia}) dividido en {len(nodos)} nodos.")
+        
+        return nodos
+
+    except Exception as e:
+        logger.error(f"❌ Error procesando {ruta_archivo}: {e}")
+        return []
