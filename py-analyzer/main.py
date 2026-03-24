@@ -2,8 +2,8 @@ import os
 from loguru import logger
 from core.tree_generator import generar_arbol_contexto  # Fase 1
 from core.reader import compilar_contexto_repositorio
-from core.ai_engine import preparar_prompt_final, SECCIONES, preparar_prompt_map
-from core.ai_engine import preparar_prompt_chunking #Fase 3 
+from core.ai_engine import preparar_prompt_repo, SECCIONES, preparar_prompt_map
+from core.ai_engine import preparar_prompt_chunking, preparar_prompt_repo_iterativo #Fase 3 
 from core.parser import analizar_codigo_ast, procesar_archivo_multilenguaje
 from dotenv import load_dotenv
 import sys
@@ -12,11 +12,8 @@ import json
 from datetime import datetime 
 from core.reader import leer_codigo_fuente
 import time
-
-
-
-
-
+from core.ai_engine import preparar_prompt_archivo_unico
+from core.reader import contar_tokens
 
 # --- CONFIGURACIÓN ---
 RUTA_PROYECTO = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\VB.NET-PROJECTS-master"
@@ -93,115 +90,212 @@ def guardar_resultado(contenido, sub_destino, prefijo, ahora):
     return ruta_completa
 
 @logger.catch
+def procesar_archivo_individual(archivo:dict, config:dict, es_modo_repo:bool=False)-> str:
+    """ Decide la estrategia de procesamiento para un solo archivo y devuelve su Markdown
+    Si es modo repo=True, genera resumenes. Si es Falase, genera informes definitivos para un archivo"""
+    nombre= str(archivo['nombre'])
+    contenido= archivo['contenido']
+    tokens_totales= archivo['tokens'] # Tokens totales del archivo or archivo.get("tokens", 0)
+    extension = os.path.splitext(nombre)[1].lower()
+    limite_tokens = 10000
+
+    logger.info(f"Analizando archivo: {nombre} ({tokens_totales} tokens)")
+    
+    # Caso 1: Archivo pequeño 
+    if tokens_totales < 1000:
+        if es_modo_repo:
+            logger.info(f"Archivo {nombre} manejable → se genera resumen.")
+            mensajes= preparar_prompt_map(nombre, contenido)
+        else:
+            logger.info(f"Archivo {nombre} manejable → se genera informe completo.")
+            mensajes= preparar_prompt_archivo_unico(nombre, contenido, SECCIONES)
+
+        informe= realizar_peticion_llm(mensajes, config)
+        #Respetamos el Rate limit de Groq 
+        logger.info("Esperando 10 segundos tras procesar archivo pequeño.")
+        time.sleep(10)
+        return informe 
+    
+    #Caso 2: Archivo grande 
+    # Lógica del Chunking 
+    
+    logger.info(f"📦 Fragmentación requerida para {nombre} ({tokens_totales} tokens)")
+    if extension == ".py":
+        logger.info("Fragmentando archivo .py con AST...")
+        #Usamos extracción por funciones y clases
+        chunk_dict = analizar_codigo_ast(contenido)
+        if chunk_dict:
+            fragmentos_finales = [f["codigo"] for f in chunk_dict.get("funciones", [])]
+            for c in chunk_dict.get("clases", []):
+                fragmentos_finales.append(c.get("codigo_firma", ""))
+                for m in c.get("metodos", []):
+                        fragmentos_finales.append(f"Clase {c['nombre']} -> Método: {m['nombre']}\n{m.get('codigo', '')}")
+            logger.info(f"Diccionario AST normalizado a {len(fragmentos_finales)} fragmentos.")
+        else:
+            logger.warning(f"Fallo en AST para {archivo['nombre']}. Usando modo backup.")
+            fragmentos_finales = [archivo["contenido"]]
+    
+                
+    else:
+        # LlamaIndex para otros lenguajes (Markdown, JS, etc.)
+        nodos = procesar_archivo_multilenguaje(
+            archivo["contenido"], str(archivo["nombre"]),
+            chunk_size=100, chunk_overlap=20 
+            )
+        fragmentos_finales = [n.get_content() for n in nodos]
+        logger.info(f"LlamaIndex → {len(fragmentos_finales)} fragmentos.")     
+
+    # --- BUCLE DE REFINAMIENTO ---
+    informe_acumulado = ""
+    chunks_pendientes = fragmentos_finales
+    
+    while chunks_pendientes:
+        mensajes, num_procesados = preparar_prompt_chunking(
+            nombre, chunks_pendientes, informe_previo=informe_acumulado, limite_tokens=limite_tokens
+        )
+        #ESCUDO ANTI-BUCLES INFINITOS
+        if num_procesados == 0:
+            logger.error(f"¡Atasco detectado! Un fragmento es más grande que el límite de tokens {limite_tokens}.")
+            logger.warning("Descartando fragmento gigante para poder continuar...") #Deberíamos poner el número de tokens de ese chunk 
+            chunks_pendientes = chunks_pendientes[1:] # Lo eliminamos a la fuerza para avanzar 
+            continue # Saltamos a la siguiente iteración sin llamar al LLM (NO SE SI ESTO ESTÁ BIEN)
+
+        
+        logger.info(f"Enviando {num_procesados} fragmentos al LLM...")
+        informe_acumulado = realizar_peticion_llm(mensajes, config)
+        
+        chunks_pendientes = chunks_pendientes[num_procesados:]
+        progreso = ((len(fragmentos_finales) - len(chunks_pendientes)) / len(fragmentos_finales)) * 100
+        logger.info(f"Progreso {nombre}: {progreso:.0f}%")
+        
+        if chunks_pendientes:
+            logger.info("⏳ Esperando 30s para liberar cuota de tokens (TPM)...")
+            time.sleep(40)
+            
+    return informe_acumulado
+
+def procesar_repositorio_completo(archivos: list, arbol: str, config: dict, ahora: str):
+    """Procesa todos los archivos y genera un informe maestro usando lotes (Batches)."""
+    
+    informe_global_acumulado = ""
+    lote_actual = ""
+    tokens_lote = 0
+    LIMITE_TOKENS_LOTE = 4000 # Enviamos al LLM cada vez que juntemos ~4k tokens de resúmenes
+    
+    for archivo in archivos:
+        try:
+            # 1. MAP: Generamos el informe de este archivo individual
+            informe_archivo = procesar_archivo_individual(archivo, config, es_modo_repo=True)
+            
+            # Guardamos el backup individual
+            guardar_resultado(informe_archivo, SUB_REPO, f"DOC_{os.path.basename(str(archivo['nombre']))}", ahora)
+            
+            # 2. Preparamos el texto a añadir al lote
+            texto_añadir = f"\n\n### Archivo: {archivo['nombre']}\n{informe_archivo}"
+            tokens_añadir = contar_tokens(texto_añadir)
+            
+            # 3. CONTROL DE LOTES (El secreto del escalado)
+            if (tokens_lote + tokens_añadir) > LIMITE_TOKENS_LOTE:
+                logger.info("📦 Lote de resúmenes lleno. Actualizando Informe Global Maestro...")
+                mensajes = preparar_prompt_repo_iterativo(arbol, lote_actual, informe_global_acumulado)
+                informe_global_acumulado = realizar_peticion_llm(mensajes, config)
+                
+                # Vaciamos el lote y metemos el archivo actual como el primero del nuevo lote
+                lote_actual = texto_añadir
+                tokens_lote = tokens_añadir
+                
+                logger.info("⏳ Esperando 25s tras actualizar el global (Rate Limit)...")
+                time.sleep(25)
+            else:
+                # Si hay espacio, seguimos llenando el lote
+                lote_actual += texto_añadir
+                tokens_lote += tokens_añadir
+                
+        except Exception as e:
+            logger.error(f"Fallo al procesar {archivo['nombre']}: {e}")
+
+    # 4. REDUCE FINAL: Si quedó algo en el lote tras terminar el bucle, hacemos la última llamada
+    if lote_actual.strip():
+        logger.info("🏁 Procesando el último lote para cerrar el Informe Global...")
+        mensajes = preparar_prompt_repo_iterativo(arbol, lote_actual, informe_global_acumulado)
+        informe_global_acumulado = realizar_peticion_llm(mensajes, config)
+
+    # 5. Guardamos el resultado definitivo
+    ruta = guardar_resultado(informe_global_acumulado, SUB_REPO, "INFORME_MAESTRO_FINAL", ahora)
+    logger.success(f"🏆 Documentación completa del repositorio guardada en: {ruta}")
+        
+"""
+def procesar_repositorio_completo(archivos: list, arbol: str, config: dict, ahora: str):
+  
+    resumenes_individuales = ""
+    
+    # 1. FASE MAP (Procesar cada archivo)
+    for archivo in archivos:
+        try:
+            informe_archivo = procesar_archivo_individual(archivo, config, es_modo_repo=True)
+            
+            # Guardamos el backup individual
+            guardar_resultado(informe_archivo, SUB_REPO, f"DOC_{os.path.basename(str(archivo['nombre']))}", ahora)
+            
+            # Acumulamos para el informe final
+            resumenes_individuales += f"\n\n### Archivo: {archivo['nombre']}\n{informe_archivo}"
+            
+        except Exception as e:
+            logger.error(f"Fallo al procesar {archivo['nombre']}: {e}")
+
+    # 2. FASE REDUCE (Generar el Informe Maestro)
+    logger.info("🧠 Generando Informe Global del Repositorio...")
+    
+   # 
+    mensajes_finales = preparar_prompt_repo(arbol, resumenes_individuales, SECCIONES)
+    
+    informe_global = realizar_peticion_llm(mensajes_finales, config)
+    ruta = guardar_resultado(informe_global, SUB_REPO, "INFORME_MAESTRO", ahora)
+    logger.success(f"🏆 Documentación completa del repositorio guardada en: {ruta}")
+
+"""
+
+@logger.catch
 def ejecutar_generador():
-    logger.info("🚀 Iniciando proceso...")
+    logger.info("🚀 Iniciando proceso RAG Documentador...")
     config = load_config()
     ahora = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # FASE 1: Estructura
+    # FASE 1: Obtener Árbol
     arbol = generar_arbol_contexto(RUTA_PROYECTO)
     if not arbol: 
         logger.error("No se pudo generar el árbol. Abortando.")
         return
 
-    # FASE 2: Selección de archivos
+    # FASE 2: Enrutamiento (Router)
     if ARCHIVO_SOLO and os.path.exists(ARCHIVO_SOLO):
-    # 1. Leemos el archivo usando tu función de reader.py
+        logger.info("⚙️ MODO: Archivo Individual")
         contenido, num_tokens = leer_codigo_fuente(ARCHIVO_SOLO)
-    
-    # Preparamos el contenedor para el procesamiento
-        archivos_a_procesar = [{"nombre": os.path.basename(ARCHIVO_SOLO), "contenido": contenido, "tokens": num_tokens}]
-        sub_destino, prefijo = SUB_SINGLE, "FILE" #
+        archivo_dict = {"nombre": os.path.basename(ARCHIVO_SOLO), "contenido": contenido, "tokens": num_tokens}
+        
+        # Llamamos a la lógica individual
+        informe_final = procesar_archivo_individual(archivo_dict, config)
+        # Si no se nombre la variable es_modo_repo, se asume False, establecido por defecto
+
+        if informe_final:
+            ruta = guardar_resultado(informe_final, SUB_SINGLE, "FILE", ahora)
+            logger.success(f"✅ Informe guardado en: {ruta}")
+        else:
+            logger.error("❌ El proceso terminó pero el informe está vacío. No se guardará nada.")
 
     else:
+        logger.info("⚙️ MODO: Repositorio Completo")
         archivos_a_procesar = compilar_contexto_repositorio(RUTA_PROYECTO)
-        sub_destino, prefijo = SUB_REPO, "Repo"
-
-    # FASE 3: Bucle MAP (Procesamiento)
-    # FASE 3: Bucle de Procesamiento (Map & Refine)
-    for archivo in archivos_a_procesar:
-        try:
-            logger.info(f"Analizando: {archivo['nombre']}")
-            extension = os.path.splitext(str(archivo["nombre"]))[1].lower()
-            tokens_totales = archivo.get("tokens", 0)
-            
-            # --- 1. NORMALIZACIÓN DE FRAGMENTOS ---
-            fragmentos_finales = []
-
-            if tokens_totales >= 1000:
-                logger.info(f"📦 Fragmentación requerida para {archivo['nombre']} ({tokens_totales} tokens)")
-                
-                if extension == ".py":
-                    logger.info("Fragmentando archivo .py con AST...")
-                    # Usamos tu nueva lógica de extracción por funciones y clases
-                    chunk_dict = analizar_codigo_ast(archivo["contenido"])
-                    
-                    if chunk_dict:
-                        fragmentos_finales = [f["codigo"] for f in chunk_dict.get("funciones", [])]
-                        for c in chunk_dict.get("clases", []):
-                            fragmentos_finales.append(c["codigo_firma"])
-                            for m in c.get("metodos", []):
-                                fragmentos_finales.append(f"Clase {c['nombre']} -> Método: {m['nombre']}\n{m['codigo']}")
-                        logger.info(f"Diccionario AST normalizado a {len(fragmentos_finales)} fragmentos.")
-                    else:
-                        logger.warning(f"Fallo en AST para {archivo['nombre']}. Usando modo backup.")
-                        fragmentos_finales = [archivo["contenido"]]
-
-                else:
-                    # LlamaIndex para otros lenguajes (Markdown, JS, etc.)
-                    nodos = procesar_archivo_multilenguaje(
-                        archivo["contenido"], str(archivo["nombre"]),
-                        chunk_size=100, chunk_overlap=20 
-                    )
-                    fragmentos_finales = [n.get_content() for n in nodos]
-                    logger.info(f"LlamaIndex → {len(fragmentos_finales)} fragmentos.")
-            else:
-                # Archivo pequeño: se procesa en un solo bloque
-                fragmentos_finales = [archivo["contenido"]]
-                logger.info("Archivo manejable → se procesa completo.")
-
-            # --- 2. BUCLE DE REFINAMIENTO (Hacia el reporte 100%) ---
-            informe_acumulado = ""
-            chunks_pendientes = fragmentos_finales
-            
-            # Si solo hay un fragmento, se comporta como un Map simple
-            # Si hay varios, entra en modo Refine usando tu función de ai_engine
-            while chunks_pendientes:
-                mensajes, num_procesados = preparar_prompt_chunking(
-                    archivo["nombre"], 
-                    chunks_pendientes, 
-                    informe_previo=informe_acumulado,
-                    limite_tokens=6000
-                )
-                # 🛡️ ESCUDO ANTI-BUCLES INFINITOS
-                if num_procesados == 0:
-                    logger.error("¡Atasco detectado! Un fragmento es más grande que el límite de tokens.")
-                    logger.warning("Descartando este fragmento gigante para poder continuar...")
-                    chunks_pendientes = chunks_pendientes[1:] # Lo eliminamos a la fuerza para avanzar
-                    continue # Saltamos a la siguiente iteración sin llamar al LLM
-                
-                logger.info(f"Enviando {num_procesados} fragmentos al LLM...")
-                informe_acumulado = realizar_peticion_llm(mensajes, config)
-                
-                # Actualizamos la lista de pendientes
-                chunks_pendientes = chunks_pendientes[num_procesados:]
         
-                progreso = ((len(fragmentos_finales) - len(chunks_pendientes)) / len(fragmentos_finales)) * 100
-                if chunks_pendientes:
-                    logger.info("⏳ Esperando 60s para liberar cuota de tokens (TPM)...")
-                    time.sleep(60)
-                logger.info(f"Progreso {archivo['nombre']}: {progreso:.0f}%")
-
-            # --- 3. PERSISTENCIA ---
-            ruta = guardar_resultado(informe_acumulado, sub_destino, prefijo, ahora)
-            logger.success(f"✅ Informe consolidado guardado en: {ruta}")
-
-        except Exception as e:
-            logger.error(f"Error crítico procesando {archivo['nombre']}: {e}")
+        if not archivos_a_procesar:
+            logger.warning("No se encontraron archivos válidos para procesar.")
+            return
+            
+        # Llamamos a la lógica de repositorio
+        procesar_repositorio_completo(archivos_a_procesar, arbol, config, ahora)
 
 if __name__ == "__main__":
     ejecutar_generador()
-
 
 
 """

@@ -50,10 +50,42 @@ REGLAS:
         {"role": "user", "content": user_content}
     ]
 
-def preparar_prompt_final(arbol: str, codigo: str, diccionario_secciones: dict) -> list[dict]: # str y dict es el tipo de dato que se espera. Lo del final es lo que nos va a devolver la máquina. 
+def preparar_prompt_archivo_unico(codigo: str, diccionario_secciones: dict) -> list[dict]: # str y dict es el tipo de dato que se espera. Lo del final es lo que nos va a devolver la máquina. 
     # 1. Convertimos el diccionario en un bloque de texto estructurado
     instrucciones_secciones = ""
     for titulo, instruccion in diccionario_secciones.items(): # items() es un método que devuelve una lista de tuplas (clave, valor)
+        instrucciones_secciones += f"{titulo}\n{instruccion}\n\n" # Concatenamos el título y la instrucción
+
+    # 2. ROL SYSTEM (Las reglas de comportamiento)
+    system_content = f"""ROL: Eres un Arquitecto de Soluciones Senior y experto en IA. Además eres tutor de unos becarios que tienes que enseñarlos.
+OBJETIVO: Tu misión es generar una documentación técnica de nivel profesional para un repositorio de código.
+TONO: Técnico, preciso y basado únicamente en los hechos del código proporcionado. Evita adjetivos subjetivos.
+
+{instrucciones_secciones} 
+
+REGLAS ADICIONALES:
+- Usa un tono profesional y técnico.
+- Si una sección no aplica a los archivos proporcionados, indícalo brevemente.
+- Genera esquemas o diagramas si ayudan a la comprensión."""
+
+    # 3. ROL USER (Los datos del proyecto)
+    user_content = f"""Aquí tienes el contexto del proyecto para analizar:
+
+
+### CÓDIGO FUENTE COMPLETO ###
+{codigo}
+
+Por favor, genera el informe siguiendo las secciones indicadas en el rol de sistema."""
+
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content}
+    ]
+
+def preparar_prompt_repo(arbol: str, codigo: str, SECCIONES: dict) -> list[dict]: # str y dict es el tipo de dato que se espera. Lo del final es lo que nos va a devolver la máquina. 
+    # 1. Convertimos el diccionario en un bloque de texto estructurado
+    instrucciones_secciones = ""
+    for titulo, instruccion in SECCIONES.items(): # items() es un método que devuelve una lista de tuplas (clave, valor)
         instrucciones_secciones += f"{titulo}\n{instruccion}\n\n" # Concatenamos el título y la instrucción
 
     # 2. ROL SYSTEM (Las reglas de comportamiento)
@@ -85,8 +117,6 @@ Por favor, genera el informe siguiendo las secciones indicadas en el rol de sist
     ]
 
 
-
-
 def preparar_prompt_chunking(nombre_archivo: str, lista_chunks: list, informe_previo: str = "", limite_tokens: int = 6000) -> tuple[list[dict], int]: # Limite_tokens: es el limite de mi ventana de contexto 
     
     reserva_output= 2000
@@ -94,14 +124,36 @@ def preparar_prompt_chunking(nombre_archivo: str, lista_chunks: list, informe_pr
     messages=[]
 
     if not informe_previo:
-        system_content = "Eres un Arquitecto de IA. Genera un informe técnico basado en el código pero siendo ULTRA CONCISO."
+        system_content = f""" Eres ingeniero de IA y tutor de unos becarios
+OBJETIVO:Tu objetivo es generar un INFORME TÉCNICO profesional en Markdown para el archivo {nombre_archivo}.
+REGLAS:
+1. Usa un lenguaje técnico  pero directo 
+2. Formato: Markdown limpio (encabezados, listas, bloques de código, etc)
+3. Contenido: explica la Responsabilidad de cada componente, no solo lo que hace. 
+4. Sé ultra conciso y ve al grano: evita instrucciones como  " En este código podemos ver ..." o "Ahora vamos a ver ..." 
+
+ESTRUCTURA DEL INFORME:
+# Informe Técnico: {nombre_archivo}
+## Resumen General
+(Breve explicación del propósito del archivo)
+## Arquitectura y Estructura
+(Clases, Funciones globales y su lógica)
+## Detalle de Componentes
+(Análisis técnico de los métodos)
+"""
     else: 
         system_content =f"""ROL: Arquitecto de IA.
 TE PASO EL ESTADO ACTUAL DEL REPORTE:
 {informe_previo}
 
-Tu objetivo es INTEGRAR los nuevos fragmentos de código en el reporte anterior. 
-MANTÉN LA BREVEDAD. No repitas lo que ya está escrito, solo añade lo nuevo o actualiza."""
+INSTRUCCIONES:
+1. Actualiza o expande las secciones correspondientes (Resumen, Arquitectura, Componentes).
+2. Si el nuevo código revela una lógica compleja, añádela de forma sucinta.
+3. MANTÉN el formato Markdown original.
+4. NO REPITAS información que ya esté en el informe.
+5. Devuelve SIEMPRE el informe completo y actualizado.
+
+"""
     messages.append({"role": "system", "content": system_content})
     
     tokens_instrucciones = contar_tokens(system_content)
@@ -109,7 +161,7 @@ MANTÉN LA BREVEDAD. No repitas lo que ya está escrito, solo añade lo nuevo o 
 
     # 2. El bucle "x6 veces" (o X veces) de la pizarra
     for chunk in lista_chunks:
-        tokens_chunk = contar_tokens(chunk) + 10 
+        tokens_chunk = contar_tokens(chunk)
         if tokens_chunk > presupuesto_maximo:
             logger.warning(f"⚠️ Chunk {chunks_incluidos + 1} es muy grande ({tokens_chunk} tokens). Presupuesto: {presupuesto_maximo}")
         # Si el chunk cabe en el presupuesto, lo añadimos como un mensaje de usuario nuevo
@@ -130,8 +182,41 @@ MANTÉN LA BREVEDAD. No repitas lo que ya está escrito, solo añade lo nuevo o 
    
     return messages, chunks_incluidos
    
-        
+def preparar_prompt_repo_iterativo(arbol: str, lote_resumenes: str, informe_previo: str = "") -> list[dict]:
+    """Genera o actualiza el informe global del repositorio por lotes."""
+    
+    if not informe_previo:
+        system_content = f"""ROL: Arquitecto de Software Senior.
+OBJETIVO: Estás creando la Documentación Global (README Técnico) de un repositorio paso a paso.
+ESTRUCTURA DEL PROYECTO:
+{arbol}
 
+INSTRUCCIONES:
+1. Analiza los resúmenes de los archivos proporcionados.
+2. Inicia un documento Markdown profesional que explique la ARQUITECTURA GLOBAL.
+3. Agrupa por módulos lógicos (ej. Frontend, Backend, Core, Utilidades), no hagas una simple lista de archivos.
+4. Mantén un tono técnico y de alto nivel."""
+
+    else:
+        system_content = f"""ROL: Arquitecto de Software Senior.
+ESTRUCTURA DEL PROYECTO:
+{arbol}
+
+DOCUMENTACIÓN GLOBAL ACTUAL (En progreso):
+{informe_previo}
+
+INSTRUCCIONES:
+1. Lee los nuevos resúmenes de archivos que se han analizado.
+2. INTEGRA esta nueva información en la Documentación Global Actual.
+3. Expande las secciones existentes o crea nuevas si descubres nuevos módulos (ej. si aparece la base de datos).
+4. Devuelve SIEMPRE el documento global completo y actualizado en Markdown. No repitas, sintetiza."""
+
+    user_content = f"NUEVOS ARCHIVOS ANALIZADOS:\n{lote_resumenes}"
+
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content}
+    ]
 """
 # ai_engine.py
 

@@ -4,6 +4,7 @@ from loguru import logger
 import tiktoken
 
 
+
 logger.add("debug_proyecto.log", rotation="1 MB", retention="1 week")
 
 # ### NUEVO: Inicializamos el codificador (usamos cl100k_base que es el de GPT-4/Gemini) ###
