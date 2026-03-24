@@ -1,0 +1,511 @@
+---
+title: "La Librería `ast` de Python: Guía Profunda para Chunking de Código"
+author: "Generador de Documentos con LLM"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    theme: darkly
+    highlight: zenburn
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+---
+
+# 1. ¿Qué es `ast`?
+
+`ast` significa **Abstract Syntax Tree** (Árbol de Sintaxis Abstracto). Es un módulo de la **librería estándar de Python** (no necesitas instalarlo, ya viene incluido).
+
+## ¿Qué problema resuelve?
+
+Imagina que tienes este código fuente Python como texto plano:
+
+```python
+def suma(a, b):
+    return a + b
+```
+
+Para un humano, ese texto tiene **significado**. Pero para un programa que quiere *analizarlo*, es solo una cadena de caracteres. ¿Cómo sabe el programa que `def` define una función, que `suma` es su nombre y que `a, b` son sus argumentos?
+
+La respuesta es el **AST**: `ast` convierte ese texto en una **estructura de datos jerárquica** que representa la gramática del código. Es como pasar de leer un texto a tener el esqueleto de su significado.
+
+> **Clave**: `ast` **no ejecuta** el código. Solo lo *entiende* estructuralmente. Esto lo hace seguro para analizar código desconocido.
+
+---
+
+# 2. El Proceso Mental: Texto → Árbol
+
+Cuando Python ejecuta un archivo `.py`, internamente hace este proceso:
+
+```
+Código fuente (texto)
+        ↓
+   Tokenización
+        ↓
+   Parsing (análisis gramatical)
+        ↓
+   AST (Árbol de Sintaxis Abstracto)  ← Aquí es donde nosotros entramos
+        ↓
+   Bytecode (.pyc)
+        ↓
+   Ejecución
+```
+
+Nosotros usamos `ast` para quedarnos en el **paso del árbol** y extraer la información que nos interesa sin llegar a ejecutar nada.
+
+---
+
+# 3. El Nodo: La Unidad Fundamental
+
+Todo en un AST son **nodos**. Cada elemento del código (una función, un import, una variable, una clase) se convierte en un tipo específico de nodo.
+
+## 3.1 Tipos de Nodos Más Importantes
+
+| Nodo AST         | ¿Qué representa en el código?                  | Ejemplo en código              |
+|------------------|------------------------------------------------|-------------------------------|
+| `ast.Module`     | El archivo completo                            | Todo el `.py`                 |
+| `ast.FunctionDef`| Una definición de función con `def`            | `def mi_funcion():`           |
+| `ast.AsyncFunctionDef` | Una función `async def`                 | `async def mi_coro():`        |
+| `ast.ClassDef`   | Una definición de clase                        | `class MiClase:`              |
+| `ast.Import`     | Un import simple                               | `import os`                   |
+| `ast.ImportFrom` | Un import con `from`                           | `from os import path`         |
+| `ast.Assign`     | Una asignación de variable                     | `x = 10`                      |
+| `ast.Expr`       | Una expresión suelta (como un string de triple comilla) | `"""Docstring suelto"""` |
+| `ast.Return`     | Un `return`                                    | `return resultado`            |
+| `ast.If`         | Un bloque `if`                                 | `if condicion:`               |
+| `ast.For`        | Un bucle `for`                                 | `for i in lista:`             |
+| `ast.While`      | Un bucle `while`                               | `while True:`                 |
+| `ast.Try`        | Un bloque `try/except`                         | `try: ... except:`            |
+| `ast.Constant`   | Un valor literal constante                     | `42`, `"hola"`, `True`        |
+| `ast.Name`       | Un nombre de variable o referencia             | `x`, `mi_var`                 |
+| `ast.Call`       | Una llamada a función                          | `print("hola")`               |
+
+## 3.2 Propiedades de Todo Nodo
+
+Cada nodo tiene propiedades que lo describen. Estas propiedades son **atributos del objeto Python**.
+
+```python
+import ast
+
+codigo = """
+def suma(a, b):
+    'Suma dos números'
+    return a + b
+"""
+
+arbol = ast.parse(codigo)
+funcion = arbol.body[0]  # El primer nodo del cuerpo del módulo
+
+print(type(funcion))          # <class 'ast.FunctionDef'>
+print(funcion.name)           # suma
+print(funcion.args.args)      # [<ast.arg object>, <ast.arg object>]
+print(funcion.lineno)         # 2  (línea donde empieza)
+print(funcion.col_offset)     # 0  (columna donde empieza)
+```
+
+---
+
+# 4. `ast.parse()`: La Puerta de Entrada
+
+```python
+arbol = ast.parse(codigo_fuente_como_string)
+```
+
+Este es **el único punto de entrada**. Le pasas el código fuente como un string y te devuelve el nodo raíz: un `ast.Module`.
+
+```python
+import ast
+
+codigo = """
+import os
+x = 42
+
+def saludar(nombre):
+    print(f"Hola, {nombre}")
+
+class Animal:
+    def __init__(self, nombre):
+        self.nombre = nombre
+"""
+
+arbol = ast.parse(codigo)
+
+# El nodo raíz siempre es ast.Module
+print(type(arbol))  # <class 'ast.Module'>
+
+# Su .body es la lista de los nodos de primer nivel
+print(len(arbol.body))  # 4 nodos: Import, Assign, FunctionDef, ClassDef
+```
+
+## Estructura Visual del Árbol
+
+```
+ast.Module
+├── ast.Import         (import os)
+├── ast.Assign         (x = 42)
+├── ast.FunctionDef    (def saludar)
+│   └── ast.Expr / ast.Call  (print(...))
+└── ast.ClassDef       (class Animal)
+    └── ast.FunctionDef  (def __init__)
+        └── ast.Assign   (self.nombre = nombre)
+```
+
+> **El cuerpo del módulo (`.body`) solo contiene los nodos de primer nivel**. Para acceder a lo que hay *dentro* de una función o clase, hay que bajar un nivel más en el árbol (`.body` de ese nodo).
+
+---
+
+# 5. `isinstance()`: El Detective de Nodos
+
+`isinstance(nodo, tipo)` es la función que usamos para **preguntar qué tipo de nodo es** el que estamos mirando.
+
+```python
+for nodo in arbol.body:
+    if isinstance(nodo, ast.FunctionDef):
+        print(f"Encontré una función: {nodo.name}")
+    elif isinstance(nodo, ast.ClassDef):
+        print(f"Encontré una clase: {nodo.name}")
+    elif isinstance(nodo, ast.Import):
+        print(f"Encontré un import")
+    elif isinstance(nodo, ast.Assign):
+        print(f"Encontré una asignación")
+```
+
+---
+
+# 6. Propiedades Clave de Cada Nodo
+
+## 6.1 `ast.FunctionDef` — Funciones
+
+```python
+# Dado: def calcular(x, y=10, *args, **kwargs):
+nodo_func = ...  # un ast.FunctionDef
+
+nodo_func.name                     # "calcular"         → str
+nodo_func.args.args                # lista de ast.arg (argumentos posicionales)
+nodo_func.args.defaults            # valores por defecto (y=10)
+nodo_func.args.vararg              # *args (ast.arg o None)
+nodo_func.args.kwarg               # **kwargs (ast.arg o None)
+nodo_func.body                     # lista de nodos dentro de la función
+nodo_func.decorator_list           # lista de decoradores (@algo)
+nodo_func.returns                  # anotación de retorno (-> tipo)
+nodo_func.lineno                   # número de línea donde empieza
+
+# Para los argumentos individuales:
+for arg in nodo_func.args.args:
+    print(arg.arg)                  # nombre del argumento (str)
+    print(arg.annotation)           # anotación de tipo (o None)
+```
+
+## 6.2 `ast.ClassDef` — Clases
+
+```python
+nodo_clase = ...  # un ast.ClassDef
+
+nodo_clase.name                    # "MiClase"
+nodo_clase.bases                   # lista de clases padre (herencia)
+nodo_clase.body                    # lista de nodos dentro de la clase
+nodo_clase.decorator_list          # decoradores
+
+# Para encontrar los métodos dentro de la clase:
+for sub_nodo in nodo_clase.body:
+    if isinstance(sub_nodo, ast.FunctionDef):
+        print(f"  Método: {sub_nodo.name}")
+```
+
+## 6.3 `ast.Import` vs `ast.ImportFrom`
+
+```python
+# import os, sys
+# → ast.Import
+nodo_import = ...
+for alias in nodo_import.names:
+    print(alias.name)     # "os", "sys"
+    print(alias.asname)   # None (si no hay "as algo")
+
+# from os import path, getcwd as cwd
+# → ast.ImportFrom
+nodo_from = ...
+print(nodo_from.module)   # "os"
+for alias in nodo_from.names:
+    print(alias.name)     # "path", "getcwd"
+    print(alias.asname)   # None, "cwd"
+```
+
+## 6.4 `ast.Assign` — Variables
+
+```python
+# x = 10
+# → ast.Assign
+nodo_asig = ...
+print(nodo_asig.targets[0].id)     # "x"  (nombre de la variable)
+print(ast.unparse(nodo_asig.value)) # "10" (valor como string)
+
+# Ojo: no siempre es .id (puede ser un atributo, índice, etc.)
+# Por eso en parser.py usamos un try o verificamos el tipo:
+if isinstance(nodo_asig.targets[0], ast.Name):
+    nombre_var = nodo_asig.targets[0].id
+```
+
+## 6.5 `ast.Expr` — Strings de Triple Comilla (Docstrings Sueltos)
+
+```python
+# Un string de triple comilla que NO está al inicio de una función/clase
+# es un ast.Expr cuyo .value es un ast.Constant de tipo str
+
+nodo_expr = ...
+if isinstance(nodo_expr.value, ast.Constant):
+    if isinstance(nodo_expr.value.value, str):
+        print("Comentario/docstring:", nodo_expr.value.value)
+```
+
+---
+
+# 7. `ast.get_docstring()`: Docstrings con Comodidad
+
+```python
+import ast
+
+codigo = """
+def mi_funcion():
+    '''Esta función hace algo importante.
+    
+    Y aquí está la descripción detallada.
+    '''
+    pass
+"""
+
+arbol = ast.parse(codigo)
+funcion = arbol.body[0]
+
+docstring = ast.get_docstring(funcion)
+# → "Esta función hace algo importante.\n\nY aquí está la descripción detallada."
+```
+
+> `ast.get_docstring(nodo)` funciona con `ast.FunctionDef`, `ast.AsyncFunctionDef`, `ast.ClassDef` y `ast.Module`. Devuelve `None` si no tiene docstring.
+
+---
+
+# 8. `ast.unparse()`: De Árbol a Código
+
+`ast.unparse(nodo)` hace el proceso **inverso**: convierte un nodo del AST de vuelta a código Python como string.
+
+```python
+import ast
+
+codigo = """
+def suma(a, b):
+    return a + b
+"""
+
+arbol = ast.parse(codigo)
+funcion = arbol.body[0]
+
+codigo_recuperado = ast.unparse(funcion)
+print(codigo_recuperado)
+# def suma(a, b):
+#     return a + b
+```
+
+> **¿Por qué es útil para nosotros?** Porque cuando extraemos un nodo (`FunctionDef`, `ClassDef`, etc.), podemos convertirlo de vuelta a código legible para mandárselo a la IA como chunk. Esto es exactamente lo que hace `parser.py`.
+
+---
+
+# 9. `ast.walk()`: Recorrer TODO el Árbol
+
+Si quieres buscar nodos en *cualquier nivel de profundidad* (no solo el primer nivel `arbol.body`), usa `ast.walk()`:
+
+```python
+import ast
+
+codigo = """
+def funcion_externa():
+    def funcion_interna():
+        x = 10
+    return funcion_interna
+"""
+
+arbol = ast.parse(codigo)
+
+# Esto solo encuentra funcion_externa (nivel 1):
+for nodo in arbol.body:
+    if isinstance(nodo, ast.FunctionDef):
+        print(nodo.name)   # Solo: funcion_externa
+
+# Esto encuentra TODAS las funciones en cualquier nivel:
+for nodo in ast.walk(arbol):
+    if isinstance(nodo, ast.FunctionDef):
+        print(nodo.name)   # funcion_externa Y funcion_interna
+```
+
+> **Cuándo usar `arbol.body` vs `ast.walk()`**:
+> - `arbol.body` → para el primer nivel (estructura principal del módulo).  
+> - `ast.walk(arbol)` → para buscar **cualquier cosa en cualquier nivel de anidamiento**.
+
+---
+
+# 10. `ast.dump()`: Ver el Árbol Completo (Para Debugging)
+
+Si quieres entender cómo AST representa un fragmento de código, usa `ast.dump()`:
+
+```python
+import ast
+
+codigo = "x = 1 + 2"
+arbol = ast.parse(codigo)
+print(ast.dump(arbol, indent=2))
+```
+
+Salida:
+```
+Module(
+  body=[
+    Assign(
+      targets=[
+        Name(id='x', ctx=Store())],
+      value=BinOp(
+        left=Constant(value=1),
+        op=Add(),
+        right=Constant(value=2)))],
+  type_ignores=[])
+```
+
+> Este dump es tu mejor herramienta para entender qué nodo genera cualquier fragmento de código.
+
+---
+
+# 11. Aplicación Directa: Cómo lo Usamos para Chunking
+
+## El Problema del Chunking Naive
+
+Si cortamos un archivo `.py` arbitrariamente por número de tokens, podemos cortar a mitad de una función:
+
+```
+[CHUNK 1]                   [CHUNK 2]
+def calcular(a, b):         return a + b
+    resultado = a +         
+```
+
+Esto hace que **la IA pierda el contexto** de qué hace la función.
+
+## La Solución con AST: Chunking Semántico
+
+En lugar de cortar por tokens, cortamos por **unidades semánticas** del código:
+
+```
+[CHUNK 1 — Función completa]
+def calcular(a, b):
+    resultado = a + b
+    return resultado
+
+[CHUNK 2 — Clase completa]
+class Calculadora:
+    def sumar(self, a, b): ...
+    def restar(self, a, b): ...
+```
+
+Cada chunk tiene **sentido completo por sí solo**. La IA puede entender perfectamente qué hace sin necesitar el contexto del resto.
+
+## El Flujo en Nuestro `parser.py`
+
+```python
+import ast
+
+def analizar_codigo_ast(codigo: str) -> dict:
+    estructura = {
+        "imports": [],
+        "funciones": [],    # ← Cada una será un chunk
+        "clases": [],       # ← Cada una será un chunk
+        "variables": [],
+        "comentarios": [],
+        "codigo_completo": codigo
+    }
+
+    arbol = ast.parse(codigo)
+
+    for nodo in arbol.body:            # Solo nivel raíz del módulo
+        
+        if isinstance(nodo, ast.FunctionDef):
+            estructura["funciones"].append({
+                "nombre": nodo.name,
+                "argumentos": [arg.arg for arg in nodo.args.args],
+                "docstring": ast.get_docstring(nodo),
+                "codigo": ast.unparse(nodo)    # ← El chunk real
+            })
+        
+        elif isinstance(nodo, ast.ClassDef):
+            metodos = [
+                sub.name for sub in nodo.body
+                if isinstance(sub, ast.FunctionDef)
+            ]
+            estructura["clases"].append({
+                "nombre": nodo.name,
+                "metodos": metodos,
+                "codigo": ast.unparse(nodo)    # ← El chunk real
+            })
+        
+        elif isinstance(nodo, ast.Import):
+            for alias in nodo.names:
+                estructura["imports"].append({
+                    "modulo": alias.name,
+                    "alias": alias.asname
+                })
+    
+    return estructura
+
+# En main.py, los chunks finales son:
+# fragmentos_finales = [f["codigo"] for f in chunk_dict["funciones"]]
+# fragmentos_finales += [c["codigo"] for c in chunk_dict["clases"]]
+# → Cada elemento es el código fuente completo de una función o clase
+```
+
+---
+
+# 12. Limitaciones de `ast` y Cuándo Usar Alternativas
+
+| Situación                                          | Usar `ast` | Usar `CodeSplitter` (LlamaIndex) |
+|----------------------------------------------------|:----------:|:--------------------------------:|
+| Archivo `.py` con funciones y clases bien definidas| ✅         | También funciona                 |
+| Archivo `.py` con solo código procedural (sin definiciones) | ⚠️ (pocos chunks) | ✅ |
+| Archivos `.js`, `.ts`, `.java`, `.md`, etc.        | ❌ (solo Python) | ✅                          |
+| Código `.py` con errores de sintaxis               | ❌ (lanza excepción) | ✅ (más tolerante)         |
+| Necesitas chunks de tamaño fijo en tokens          | ❌         | ✅                               |
+
+> **Por eso en `parser.py` tenemos las dos estrategias**: AST para `.py` (chunking semántico perfecto), y `CodeSplitter` de LlamaIndex para el resto (chunking por líneas configurables).
+
+---
+
+# 13. Resumen Visual del Flujo Completo
+
+```
+archivo.py (texto)
+      │
+      ▼
+ast.parse(codigo)
+      │
+      ▼
+ast.Module  (raíz del árbol)
+  ├── ast.Import         → estructura["imports"]
+  ├── ast.FunctionDef    → estructura["funciones"] → CHUNK para la IA
+  ├── ast.ClassDef       → estructura["clases"]    → CHUNK para la IA
+  ├── ast.Assign         → estructura["variables"]
+  └── ast.Expr (str)     → estructura["comentarios"]
+      │
+      ▼
+ast.unparse(nodo)  →  Código fuente del chunk (string)
+      │
+      ▼
+LLM recibe cada chunk por separado
+      │
+      ▼
+Documentación generada por unidad semántica
+```
+
+---
+
+*Documento generado para el proyecto **Generador-de-documentos-con-LLM** | `py-analyzer`*

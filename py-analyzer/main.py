@@ -2,19 +2,27 @@ import os
 from loguru import logger
 from core.tree_generator import generar_arbol_contexto  # Fase 1
 from core.reader import compilar_contexto_repositorio
-from core.ai_engine import preparar_prompt_final, SECCIONES, preparar_prompt_map   #Fase 3 
+from core.ai_engine import preparar_prompt_final, SECCIONES, preparar_prompt_map
+from core.ai_engine import preparar_prompt_chunking #Fase 3 
+from core.parser import analizar_codigo_ast, procesar_archivo_multilenguaje
 from dotenv import load_dotenv
 import sys
 import requests
 import json
 from datetime import datetime 
+from core.reader import leer_codigo_fuente
+import time
+
+
 
 
 
 
 # --- CONFIGURACIÓN ---
-RUTA_PROYECTO = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM"
-ARCHIVO_SOLO = None #r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py"
+RUTA_PROYECTO = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\VB.NET-PROJECTS-master"
+#r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM"
+ARCHIVO_SOLO = r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Generador-de-documentos-con-LLM-\venv\Lib\site-packages\marshmallow\fields.py"
+ #r"C:\Users\EM2026008876\OneDrive - Nfoque nworld6.onmicrosoft.com\Escritorio\Arquitectura_Rag_con_LLM\Rag.py"
 CARPETA_BASE= "salida_de_informes"
 #------------------------
 # Subcarpetas 
@@ -50,6 +58,7 @@ def load_config():
         sys.exit(1)
 
     return config
+
 
 def realizar_peticion_llm(mensajes, config):
     """Encapsula la lógica de comunicación con el backend (Groq/Ollama)."""
@@ -97,29 +106,98 @@ def ejecutar_generador():
 
     # FASE 2: Selección de archivos
     if ARCHIVO_SOLO and os.path.exists(ARCHIVO_SOLO):
-        archivos_a_procesar = [{"nombre": os.path.basename(ARCHIVO_SOLO), "contenido": leer_codigo_fuente(ARCHIVO_SOLO)[0]}]
-        sub_destino, prefijo = SUB_SINGLE, "FILE"
+    # 1. Leemos el archivo usando tu función de reader.py
+        contenido, num_tokens = leer_codigo_fuente(ARCHIVO_SOLO)
+    
+    # Preparamos el contenedor para el procesamiento
+        archivos_a_procesar = [{"nombre": os.path.basename(ARCHIVO_SOLO), "contenido": contenido, "tokens": num_tokens}]
+        sub_destino, prefijo = SUB_SINGLE, "FILE" #
+
     else:
         archivos_a_procesar = compilar_contexto_repositorio(RUTA_PROYECTO)
         sub_destino, prefijo = SUB_REPO, "Repo"
 
     # FASE 3: Bucle MAP (Procesamiento)
+    # FASE 3: Bucle de Procesamiento (Map & Refine)
     for archivo in archivos_a_procesar:
         try:
             logger.info(f"Analizando: {archivo['nombre']}")
+            extension = os.path.splitext(str(archivo["nombre"]))[1].lower()
+            tokens_totales = archivo.get("tokens", 0)
             
-            # Aquí podrías insertar la fragmentación con LlamaIndex si es necesario
-            mensajes = preparar_prompt_map(archivo["nombre"], archivo["contenido"])
+            # --- 1. NORMALIZACIÓN DE FRAGMENTOS ---
+            fragmentos_finales = []
+
+            if tokens_totales >= 1000:
+                logger.info(f"📦 Fragmentación requerida para {archivo['nombre']} ({tokens_totales} tokens)")
+                
+                if extension == ".py":
+                    logger.info("Fragmentando archivo .py con AST...")
+                    # Usamos tu nueva lógica de extracción por funciones y clases
+                    chunk_dict = analizar_codigo_ast(archivo["contenido"])
+                    
+                    if chunk_dict:
+                        fragmentos_finales = [f["codigo"] for f in chunk_dict.get("funciones", [])]
+                        for c in chunk_dict.get("clases", []):
+                            fragmentos_finales.append(c["codigo_firma"])
+                            for m in c.get("metodos", []):
+                                fragmentos_finales.append(f"Clase {c['nombre']} -> Método: {m['nombre']}\n{m['codigo']}")
+                        logger.info(f"Diccionario AST normalizado a {len(fragmentos_finales)} fragmentos.")
+                    else:
+                        logger.warning(f"Fallo en AST para {archivo['nombre']}. Usando modo backup.")
+                        fragmentos_finales = [archivo["contenido"]]
+
+                else:
+                    # LlamaIndex para otros lenguajes (Markdown, JS, etc.)
+                    nodos = procesar_archivo_multilenguaje(
+                        archivo["contenido"], str(archivo["nombre"]),
+                        chunk_size=100, chunk_overlap=20 
+                    )
+                    fragmentos_finales = [n.get_content() for n in nodos]
+                    logger.info(f"LlamaIndex → {len(fragmentos_finales)} fragmentos.")
+            else:
+                # Archivo pequeño: se procesa en un solo bloque
+                fragmentos_finales = [archivo["contenido"]]
+                logger.info("Archivo manejable → se procesa completo.")
+
+            # --- 2. BUCLE DE REFINAMIENTO (Hacia el reporte 100%) ---
+            informe_acumulado = ""
+            chunks_pendientes = fragmentos_finales
             
-            # Llamada centralizada
-            informe = realizar_peticion_llm(mensajes, config)
-            
-            # Guardado centralizado
-            ruta = guardar_resultado(informe, sub_destino, prefijo, ahora)
-            logger.success(f"✅ Guardado en: {ruta}")
-            
+            # Si solo hay un fragmento, se comporta como un Map simple
+            # Si hay varios, entra en modo Refine usando tu función de ai_engine
+            while chunks_pendientes:
+                mensajes, num_procesados = preparar_prompt_chunking(
+                    archivo["nombre"], 
+                    chunks_pendientes, 
+                    informe_previo=informe_acumulado,
+                    limite_tokens=6000
+                )
+                # 🛡️ ESCUDO ANTI-BUCLES INFINITOS
+                if num_procesados == 0:
+                    logger.error("¡Atasco detectado! Un fragmento es más grande que el límite de tokens.")
+                    logger.warning("Descartando este fragmento gigante para poder continuar...")
+                    chunks_pendientes = chunks_pendientes[1:] # Lo eliminamos a la fuerza para avanzar
+                    continue # Saltamos a la siguiente iteración sin llamar al LLM
+                
+                logger.info(f"Enviando {num_procesados} fragmentos al LLM...")
+                informe_acumulado = realizar_peticion_llm(mensajes, config)
+                
+                # Actualizamos la lista de pendientes
+                chunks_pendientes = chunks_pendientes[num_procesados:]
+        
+                progreso = ((len(fragmentos_finales) - len(chunks_pendientes)) / len(fragmentos_finales)) * 100
+                if chunks_pendientes:
+                    logger.info("⏳ Esperando 60s para liberar cuota de tokens (TPM)...")
+                    time.sleep(60)
+                logger.info(f"Progreso {archivo['nombre']}: {progreso:.0f}%")
+
+            # --- 3. PERSISTENCIA ---
+            ruta = guardar_resultado(informe_acumulado, sub_destino, prefijo, ahora)
+            logger.success(f"✅ Informe consolidado guardado en: {ruta}")
+
         except Exception as e:
-            logger.error(f"Error procesando {archivo['nombre']}: {e}")
+            logger.error(f"Error crítico procesando {archivo['nombre']}: {e}")
 
 if __name__ == "__main__":
     ejecutar_generador()

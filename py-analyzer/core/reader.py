@@ -9,6 +9,10 @@ logger.add("debug_proyecto.log", rotation="1 MB", retention="1 week")
 # ### NUEVO: Inicializamos el codificador (usamos cl100k_base que es el de GPT-4/Gemini) ###
 encoding = tiktoken.get_encoding("cl100k_base")
 
+def contar_tokens(texto: str) -> int:
+    """Cuenta los tokens exactos de un string."""
+    return len(encoding.encode(texto))
+
 @logger.catch
 def leer_codigo_fuente(ruta_archivo: str):
     ruta = Path(ruta_archivo)

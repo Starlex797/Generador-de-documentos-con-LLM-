@@ -2,6 +2,8 @@
 
 import os
 from loguru import logger
+from core.reader import contar_tokens
+
 
 
 
@@ -84,3 +86,88 @@ Por favor, genera el informe siguiendo las secciones indicadas en el rol de sist
 
 
 
+
+def preparar_prompt_chunking(nombre_archivo: str, lista_chunks: list, informe_previo: str = "", limite_tokens: int = 6000) -> tuple[list[dict], int]: # Limite_tokens: es el limite de mi ventana de contexto 
+    
+    reserva_output= 2000
+    presupuesto_maximo = limite_tokens - reserva_output
+    messages=[]
+
+    if not informe_previo:
+        system_content = "Eres un Arquitecto de IA. Genera un informe técnico basado en el código pero siendo ULTRA CONCISO."
+    else: 
+        system_content =f"""ROL: Arquitecto de IA.
+TE PASO EL ESTADO ACTUAL DEL REPORTE:
+{informe_previo}
+
+Tu objetivo es INTEGRAR los nuevos fragmentos de código en el reporte anterior. 
+MANTÉN LA BREVEDAD. No repitas lo que ya está escrito, solo añade lo nuevo o actualiza."""
+    messages.append({"role": "system", "content": system_content})
+    
+    tokens_instrucciones = contar_tokens(system_content)
+    chunks_incluidos = 0
+
+    # 2. El bucle "x6 veces" (o X veces) de la pizarra
+    for chunk in lista_chunks:
+        tokens_chunk = contar_tokens(chunk) + 10 
+        if tokens_chunk > presupuesto_maximo:
+            logger.warning(f"⚠️ Chunk {chunks_incluidos + 1} es muy grande ({tokens_chunk} tokens). Presupuesto: {presupuesto_maximo}")
+        # Si el chunk cabe en el presupuesto, lo añadimos como un mensaje de usuario nuevo
+        if (tokens_instrucciones + tokens_chunk) < presupuesto_maximo:
+            messages.append({"role": "user", "content": f"CHUNK {chunks_incluidos + 1}:\n{chunk}"})
+            tokens_instrucciones += tokens_chunk
+            chunks_incluidos += 1
+        else:
+            logger.info(f"Ventana de contexto llena. Se han metido {chunks_incluidos} fragmentos.")
+            logger.info(
+                f"📊 [TELEMETRÍA] Archivo: {nombre_archivo} | "
+                f"Chunks: {chunks_incluidos}/{len(lista_chunks)} | "
+                f"Tokens Input: {tokens_instrucciones} | "
+                f"Espacio libre para respuesta: {limite_tokens - tokens_instrucciones}"
+            )
+            # Si no cabe más, paramos de añadir a este paquete
+            break
+   
+    return messages, chunks_incluidos
+   
+        
+
+"""
+# ai_engine.py
+
+def preparar_paquete_dinamico(nombre_archivo: str, lista_chunks: list, informe_previo: str = "", limite_tokens: int = 120000) -> tuple[list[dict], int]:
+  
+    Construye la lista de mensajes (el paquete) metiendo tantos chunks como quepan.
+    Devuelve (lista_de_mensajes, num_chunks_procesados)
+   "
+    mensajes = []
+    
+    # 1. El System Prompt (La primera llave de la pizarra)
+    instruccion_sistema = "Eres un Arquitecto Senior. Actualiza el informe técnico con el código proporcionado."
+    if informe_previo:
+        instruccion_sistema += f"\n\nESTADO ACTUAL DEL INFORME:\n{informe_previo}"
+    
+    mensajes.append({"role": "system", "content": instruccion_sistema})
+    
+    tokens_consumidos = len(instruccion_sistema) // 4 # Estimación simple o usa tiktoken
+    chunks_incluidos = 0
+
+    # 2. El bucle "x6 veces" (o X veces) de la pizarra
+    for chunk in lista_chunks:
+        tokens_este_chunk = len(chunk) // 4
+        
+        # Si el chunk cabe en el presupuesto, lo añadimos como un mensaje de usuario nuevo
+        if tokens_consumidos + tokens_este_chunk < limite_tokens:
+            mensajes.append({"role": "user", "content": f"CHUNK {chunks_incluidos + 1}:\n{chunk}"})
+            tokens_consumidos += tokens_este_chunk
+            chunks_incluidos += 1
+        else:
+            # Si no cabe más, paramos de añadir a este paquete
+            break
+            
+    return mensajes, chunks_incluidos
+
+
+    
+
+"""

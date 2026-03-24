@@ -1,10 +1,15 @@
 # parser.py — Preprocesamiento y chunking AST del código fuente
+# parser.py
 import ast
 from loguru import logger
+import os 
 import json
-from llama_index.core.node_parser import TokenTextSplitter, CodeNodeParser, SemanticSplitterNodeParser
+# Cambiamos CodeNodeParser por CodeSplitter
+from llama_index.core.node_parser import TokenTextSplitter, CodeSplitter
 from llama_index.core import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+
+# Modifica la línea 6 de parser.py
+
 
 """No estamos creando el Chunking todavía, estamos separando el código en funciones/ clases y poniendolo en un diccionario"""
 
@@ -26,7 +31,8 @@ def analizar_codigo_ast(codigo: str)-> dict: # Me lo convierte en un diccionario
     except Exception as e:
         logger.exception(f"Fallo crítico al analizar el código: {e}")
         return None
-    for nodo in arbol.body: # Aqui se ignora todo lo que sea ruid, como variables sueltas o imports
+
+    for nodo in arbol.body: # Aqui se ignora todo lo que sea ruido, como variables sueltas o imports. Con este loop estamos recorriendo todo lso nodos del árbol
         if isinstance(nodo,ast.FunctionDef): #isinstance nos permite verificar si un objeto es una instancia de una clase
             estructura["funciones"].append({
                 "nombre": nodo.name,
@@ -39,22 +45,30 @@ def analizar_codigo_ast(codigo: str)-> dict: # Me lo convierte en un diccionario
             # Entramos a mirar qué hay DENTRO de la clase
             for sub_nodo in nodo.body:
                 if isinstance(sub_nodo, ast.FunctionDef):
-                    metodos.append(sub_nodo.name)
+                    metodos.append({
+                        "nombre": sub_nodo.name,
+                        "codigo": ast.unparse(sub_nodo)
+                    })
             
             estructura["clases"].append({
                 "nombre": nodo.name,
-                "metodos": metodos, # ¡Ahora sabemos qué hace la clase por dentro!
-                "codigo": ast.unparse(nodo) # El código completo para la IA
+                "metodos": metodos, # ¡Ahora sabemos qué hace la clase por dentro
+                # En lugar de guardar toda la clase, guardamos solo su cabecera
+                "codigo_firma": f"class {nodo.name}:\n    pass # (Métodos procesados por separado)"
             })
-        elif isinstance(nodo,ast.Import): # ast.Import es un nodo que representa un import
-            estructura["imports"].append({
-                "modulo": nodo.name,
-                "alias": nodo.names[0].asname
-            })
-        elif isinstance(nodo,ast.Expr): # ast.Expr es un nodo que representa una expresión
-            estructura["comentarios"].append({
-                "comentario": ast.get_docstring(nodo)
-            })
+        elif isinstance(nodo, ast.Import): # Corrección del error 'AttributeError'
+            for alias in nodo.names:
+                estructura["imports"].append({
+                    "modulo": alias.name, # Correcto: accedemos al nombre del alias
+                    "alias": alias.asname
+                })
+        # 4. Procesamiento de Comentarios/Strings sueltos
+        elif isinstance(nodo, ast.Expr):
+            # Comprobamos si la expresión es una constante de texto (comentarios de triple comilla)
+            if isinstance(nodo.value, ast.Constant) and isinstance(nodo.value.value, str):
+                estructura["comentarios"].append({
+                    "comentario": nodo.value.value
+                })
         elif isinstance(nodo,ast.Assign): # ast.Assign es un nodo que representa una asignación
             estructura["variables"].append({
                 "nombre": nodo.targets[0].id,
@@ -65,69 +79,8 @@ def analizar_codigo_ast(codigo: str)-> dict: # Me lo convierte en un diccionario
 
 
 
-def splitting_and_processing_with_langchain(contenido:str, ruta_archivo:str, chunk_size: int, chunk_overlap: int):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap, language=Language.PYTHON)
-    return splitter
-
-"""
-# 'texto_extraido' viene de tu función leer_codigo_fuente
-
-Esto nos permite guardar cada uno de los chunks en un objeto o variable. Después havemos un for loop para enumerar cada uno de los chunks y mostrar su contenido.
-docs = splitter.create_documents([texto_extraido])
-
-for i, doc in enumerate(docs):
-    print(f"Fragmento {i}: {len(doc.page_content)} caracteres")
-
-MAPPING_LENGUAJES = {
-    ".py": Language.PYTHON,
-    ".js": Language.JS,
-    ".java": Language.JAVA
-}
-# Así, según el sufijo del archivo en reader.py, eliges el Language correcto.
-from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
-from pathlib import Path
-# Importamos los lenguajes que soporta LangChain
-
-def procesar_y_dividir_codigo(contenido: str, ruta_archivo: str, chunk_size: int = 2000):
- 
-    Toma el contenido de un archivo, detecta su lenguaje y lo divide en chunks lógicos.
-  
-    # 1. Mapeo de extensiones a lenguajes de LangChain
-    extension = Path(ruta_archivo).suffix.lower()
-    mapping = {
-        ".py": Language.PYTHON,
-        ".js": Language.JS,
-        ".java": Language.JAVA,
-        ".cpp": Language.CPP,
-        ".md": Language.MARKDOWN
-    }
-    
-    # Seleccionamos el lenguaje o usamos texto plano por defecto
-    lenguaje_seleccionado = mapping.get(extension, None)
-    
-    # 2. Configuración del Splitter
-    if lenguaje_seleccionado:
-        splitter = RecursiveCharacterTextSplitter.from_language(
-            language=lenguaje_seleccionado,
-            chunk_size=chunk_size,
-            chunk_overlap=int(chunk_size * 0.1) # 10% de solapamiento
-        )
-    else:
-        # Si no reconoce el lenguaje, usa un splitter de texto genérico
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=200
-        )
-    
-    # 3. Ejecución del corte
-    chunks = splitter.split_text(contenido)
-    return chunks
-"""
-
-
 # 1. Definimos el mapeo global de extensiones soportadas
 MAPPING_LENGUAJES = {
-    ".py": "python",
     ".js": "javascript",
     ".ts": "typescript",
     ".java": "java",
@@ -156,26 +109,35 @@ def procesar_archivo_multilenguaje(contenido: str, ruta_archivo: str, chunk_size
         lenguaje_ia = "python"
 
     try:
-        # Crear el Documento con metadatos para el informe final
         doc = Document(
             text=contenido,
             metadata={
                 "file_name": os.path.basename(ruta_archivo),
                 "language": lenguaje_ia,
-                "path": ruta_archivo,
-                "chunk_size": chunk_size,
+                "path": ruta_archivo
             }
         )
 
-        # Configurar el parser con el lenguaje detectado
-        parser = CodeNodeParser(
-            language=lenguaje_ia,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
+        # 2. ESTRATEGIA DE CHUNKING SEGÚN EXTENSIÓN
+        if extension in [".json", ".md", ".txt"]:
+            # Para JSON/MD no necesitamos gramática, solo trozos de texto válidos
+            logger.info(f"Usando TokenTextSplitter para {os.path.basename(ruta_archivo)}")
+            parser = TokenTextSplitter(
+                chunk_size=chunk_size, 
+                chunk_overlap=chunk_overlap
+            )
+        else:
+            # Para código real (.py, .js, .java, etc.) usamos CodeSplitter
+            logger.info(f"Usando CodeSplitter para {os.path.basename(ruta_archivo)} ({lenguaje_ia})")
+            parser = CodeSplitter(
+                language=lenguaje_ia,
+                chunk_lines=40,
+                chunk_lines_overlap=5,
+                max_chars=chunk_size
+            )
 
         nodos = parser.get_nodes_from_documents([doc])
-        logger.info(f"✅ {os.path.basename(ruta_archivo)} ({lenguaje_ia}) dividido en {len(nodos)} nodos.")
+        logger.info(f"✅ {os.path.basename(ruta_archivo)} dividido en {len(nodos)} nodos.")
         
         return nodos
 
